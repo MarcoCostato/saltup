@@ -376,7 +376,7 @@ def training(
             golden_model_name = os.path.basename(golden_model_path).replace('.keras', '')       
             onnx_model_path = os.path.join(golden_model_folder, f'{golden_model_name}.onnx')
             golden_model = keras.models.load_model(golden_model_path)
-            golden_model(train_datagenerator[0][0])  # Run a dummy inference to build the model if not already built
+            golden_model(train_generator[0][0])  # Run a dummy inference to build the model if not already built
             golden_model.export(onnx_model_path, format="onnx")
             results_dict['models_paths'].append(onnx_model_path)
             

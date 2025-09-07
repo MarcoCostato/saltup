@@ -184,7 +184,7 @@ class TestNeuralNetworkModel:
         
         # Test supported formats
         formats = nn_model.get_supported_formats()
-        expected_formats = [".pt", ".keras", ".h5", ".onnx", ".tflite"]
+        expected_formats = [".pt", ".pth", ".keras", ".h5", ".onnx", ".tflite"]
         assert formats == expected_formats
 
     def test_inference_time_measurement(self, sample_models):
