@@ -11,6 +11,8 @@ from collections import defaultdict
 from typing import List, Tuple, Dict, Union
 from tqdm import tqdm
 
+os.environ["SALTUP_BACKEND"] = "keras_tensorflow"  # Example backend setting
+
 from saltup.ai.object_detection.yolo.yolo import BaseYolo, YoloOutput
 from saltup.ai.object_detection.yolo import yolo
 from saltup.ai.object_detection.yolo.yolo_type import YoloType

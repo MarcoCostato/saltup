@@ -2,6 +2,8 @@
 from pathlib import Path
 import argparse
 import sys
+import os
+os.environ["SALTUP_BACKEND"] = "keras_tensorflow"  # Example backend setting
 
 from saltup.utils import configure_logging
 from saltup.ai.object_detection.dataset.yolo_darknet import create_symlinks_by_class, _extract_unique_classes

@@ -146,8 +146,8 @@ def _train_model(
         
         model = model.to(device)
         
-        best_model_path = os.path.join(saved_models_folder_path, f'{model_output_name}_best.pt')
-        last_epoch_model = os.path.join(saved_models_folder_path, f'{model_output_name}_last_epoch.pt')
+        best_model_path = os.path.join(saved_models_folder_path, f'{model_output_name}_best.pth')
+        last_epoch_model = os.path.join(saved_models_folder_path, f'{model_output_name}_last_epoch.pth')
         
         for callback in app_callbacks:
             callback.on_train_begin(context)
@@ -474,7 +474,7 @@ def training(
                 results_dict['models_paths'].append(tflite_model_path)
         elif isinstance(training_model, torch.nn.Module) and SaltupEnv.SALTUP_BACKEND == BackendType.TORCH:
             model_folder = os.path.dirname(model_path)
-            model_name = os.path.basename(model_path).replace('.pt', '')
+            model_name = os.path.basename(model_path).replace('.pth', '')
             onnx_model_path = os.path.join(model_folder, f'{model_name}.onnx')
 
             # Use the shape of a real batch from the validation dataloader as input shape for ONNX conversion

@@ -1,4 +1,6 @@
 #!/usr/bin/env python3
+import os
+os.environ["SALTUP_BACKEND"] = "keras_tensorflow"  # Example backend setting
 from saltup.saltup_env import SaltupEnv
 
 def print_saltup_info():

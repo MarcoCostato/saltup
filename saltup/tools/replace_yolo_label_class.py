@@ -3,7 +3,9 @@
 CLI tool to replace a YOLO class ID in label files using replace_label_class().
 """
 import argparse
+import os
 import sys
+os.environ["SALTUP_BACKEND"] = "keras_tensorflow"  # Example backend setting
 
 from saltup.ai.object_detection.dataset.yolo_darknet import replace_label_class
 

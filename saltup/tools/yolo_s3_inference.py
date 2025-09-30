@@ -9,6 +9,8 @@ from pathlib import Path
 from typing import Optional, Union, List
 from types import SimpleNamespace
 from tqdm import tqdm
+import os
+os.environ["SALTUP_BACKEND"] = "keras_tensorflow"  # Example backend setting
 
 from saltup.utils.data.s3 import S3, list_files_by_time
 from saltup.tools import yolo_video
