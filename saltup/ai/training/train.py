@@ -374,10 +374,15 @@ def training(
         if isinstance(fold_model, keras.Model):
             golden_model_name = os.path.basename(golden_model_path).replace('.keras', '')       
             onnx_model_path = os.path.join(golden_model_folder, f'{golden_model_name}.onnx')
-            golden_model = keras.models.load_model(golden_model_path, compile=False)
-            golden_model(train_generator[0][0])  # Run a dummy inference to build the model if not already built
-            golden_model.export(onnx_model_path, format="onnx")
-            results_dict['models_paths'].append(onnx_model_path)
+            
+            if SaltupEnv.SALTUP_BACKEND == BackendType.KERAS_TENSORFLOW:
+                model_proto, _ = convert_keras_to_onnx(golden_model_path, onnx_model_path,SaltupEnv.SALTUP_ONNX_OPSET)
+                results_dict['models_paths'].append(onnx_model_path)
+            elif SaltupEnv.SALTUP_BACKEND == BackendType.KERAS_TORCH:
+                golden_model = keras.models.load_model(golden_model_path, compile=False)
+                golden_model(train_generator[0][0])  # Run a dummy inference to build the model if not already built
+                golden_model.export(onnx_model_path, format="onnx")
+                results_dict['models_paths'].append(onnx_model_path)
             
             torch_model = convert(onnx_model_path)
             torch_model.input_shape = golden_model.input_shape
@@ -452,11 +457,16 @@ def training(
         if isinstance(training_model, keras.Model):
             model_folder = os.path.dirname(model_path)
             model_name = os.path.basename(model_path).replace('.keras', '')
-            onnx_model_path = os.path.join(model_folder, f'{model_name}.onnx')   
-            model = keras.models.load_model(model_path, compile=False)
-            model(train_datagenerator[0][0])  # Run a dummy inference to build the model if not already built
-            model.export(onnx_model_path, format="onnx")
-            results_dict['models_paths'].append(onnx_model_path)
+            onnx_model_path = os.path.join(model_folder, f'{model_name}.onnx')
+            if SaltupEnv.SALTUP_BACKEND == BackendType.KERAS_TENSORFLOW:
+                model_proto, _ = convert_keras_to_onnx(model_path, onnx_model_path,SaltupEnv.SALTUP_ONNX_OPSET)
+                results_dict['models_paths'].append(onnx_model_path)
+            elif SaltupEnv.SALTUP_BACKEND == BackendType.KERAS_TORCH:
+                model = keras.models.load_model(model_path, compile=False)
+                model(train_datagenerator[0][0])  # Run a dummy inference to build the model if not already built
+                model.export(onnx_model_path, format="onnx")
+                results_dict['models_paths'].append(onnx_model_path)
+            
             
             torch_model = convert(onnx_model_path)
             torch_model.input_shape = model.input_shape

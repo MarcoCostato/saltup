@@ -57,6 +57,10 @@ class _SaltupEnv:
         return os.getenv("SALTUP_KERAS_TRAIN_SHUFFLE", "True").lower() in ("true", "1", "yes")
     
     @property
+    def SALTUP_KERAS_TO_ONNX(self):
+        return os.getenv("SALTUP_KERAS_TO_ONNX", "True").lower() in ("true", "1", "yes")
+    
+    @property
     def SALTUP_KERAS_TRAIN_VERBOSE(self):
         return int(os.getenv("SALTUP_KERAS_TRAIN_VERBOSE", 1))
     
