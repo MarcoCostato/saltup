@@ -34,8 +34,7 @@ class BackendType(IntEnum):
         elif backend_str == "torch":
             return cls.TORCH
         else:
-            print(f"Default BackendType: keras_tensorflow")
-            return cls.KERAS_TENSORFLOW
+            return 0
             
 
 class _SaltupEnv:
