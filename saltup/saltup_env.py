@@ -206,7 +206,9 @@ class _SaltupEnv:
             print("SALTUP_BACKEND set to 'torch'. Using PyTorch directly.")
             return backend_int
         else:
-            raise ValueError(f"Unsupported SALTUP_BACKEND value: {backend_str}. Supported values are 'keras_tensorflow', 'keras_torch', 'keras_jax', 'torch'.")
+            os.environ["KERAS_BACKEND"] = "tensorflow"
+            print("SALTUP_BACKEND set to default mode 'keras_tensorflow'. Using TensorFlow as Keras backend.")
+            #raise ValueError(f"Unsupported SALTUP_BACKEND value: {backend_str}. Supported values are 'keras_tensorflow', 'keras_torch', 'keras_jax', 'torch'.")
 
 
 # Create a singleton instance for easy access
