@@ -10,6 +10,7 @@ import onnx
 from onnx import helper, TensorProto
 import tempfile
 import os
+os.environ["SALTUP_BACKEND"] = "keras_tensorflow"
 from typing import Any, Dict, List, Tuple
 import torch
 from saltup.ai.nn_model import NeuralNetworkModel

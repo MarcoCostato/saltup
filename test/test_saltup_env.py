@@ -1,5 +1,4 @@
 import pytest
-import os
 import json
 import tempfile
 from unittest.mock import patch, mock_open

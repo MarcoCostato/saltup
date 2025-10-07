@@ -1,5 +1,6 @@
 import pytest
 import os
+os.environ["SALTUP_BACKEND"] = "keras_tensorflow"
 import yaml
 from dotmap import DotMap
 import math
@@ -7,7 +8,7 @@ import numpy as np
 import torch
 import torch.nn as nn
 import tensorflow as tf
-from tensorflow import keras
+import keras
 import albumentations as A
 import matplotlib.pyplot as plt
 from typing import Tuple, List
@@ -422,7 +423,7 @@ class TestFrameworksAnchorsBasedDatagenerator:
                                  len(datagen_configs.anchors), 5 + datagen_configs.num_classes)
 
         # Create and compile model with mixed precision disabled
-        tf.keras.mixed_precision.set_global_policy('float32')
+        keras.mixed_precision.set_global_policy('float32')
         model = create_simple_keras_model(
             input_shape=(*datagen_configs.target_size, 1),
             num_classes=datagen_configs.num_classes,

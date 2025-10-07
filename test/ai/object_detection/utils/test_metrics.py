@@ -2,6 +2,8 @@ import numpy as np
 import tensorflow as tf
 from tensorflow.keras.metrics import AUC  # type: ignore
 import unittest
+import os
+os.environ["SALTUP_BACKEND"] = "keras_tensorflow"
 from saltup.ai.object_detection.utils.bbox import BBox, BBoxFormat
 from saltup.ai.object_detection.utils.metrics import compute_ap, compute_ap_for_threshold, compute_map_50_95
 

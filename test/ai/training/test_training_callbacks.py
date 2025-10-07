@@ -1,5 +1,7 @@
 import pytest
 from unittest import mock
+import os
+os.environ["SALTUP_BACKEND"] = "keras_tensorflow"
 from saltup.ai.training.callbacks import _KerasCallbackAdapter, BaseCallback, CallbackContext
 
 

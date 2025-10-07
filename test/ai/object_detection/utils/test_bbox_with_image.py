@@ -1,6 +1,8 @@
 import unittest
 import numpy as np
 import cv2
+import os
+os.environ["SALTUP_BACKEND"] = "keras_tensorflow"
 from typing import List, Tuple
 from saltup.ai.object_detection.utils.bbox import BBox, BBoxFormat, draw_boxes_on_image, draw_boxes_on_image_with_labels_score
 from saltup.utils.data.image.image_utils import generate_random_bgr_colors ,Image

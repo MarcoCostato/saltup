@@ -1,3 +1,5 @@
+import os
+
 from saltup.ai.classification.datagenerator import ClassificationDataloader, pytorch_ClassificationDataGenerator, keras_ClassificationDataGenerator
 from saltup.ai.classification.dataloader import ClassificationDataloader
 import pytest

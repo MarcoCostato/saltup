@@ -1,6 +1,7 @@
 import pytest
 import numpy as np
 import os
+os.environ["SALTUP_BACKEND"] = "keras_tensorflow"
 import onnx
 import onnxruntime as ort
 from onnx import helper, TensorProto

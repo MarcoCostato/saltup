@@ -1,6 +1,8 @@
 import json
 import pytest
 from pathlib import Path
+import os
+os.environ["SALTUP_BACKEND"] = "keras_tensorflow"
 
 from saltup.ai.object_detection.dataset.loader_factory import DataLoaderFactory
 from saltup.ai.object_detection.dataset.coco import COCOLoader, create_dataset_structure as create_coco_structure

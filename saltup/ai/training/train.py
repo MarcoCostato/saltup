@@ -13,11 +13,12 @@ import matplotlib.pyplot as plt
 import torch
 from torch.utils.data import DataLoader as pytorch_DataGenerator
 
-import tensorflow as tf
+import keras
 
-from saltup.saltup_env import SaltupEnv
+from saltup.saltup_env import SaltupEnv, BackendType
 from saltup.ai.base_dataformat.base_datagen import BaseDatagenerator, kfoldGenerator
 from saltup.ai.classification.evaluate import evaluate_model
+from onnx2torch import convert
 from saltup.ai.utils.keras.to_onnx import *
 from saltup.ai.utils.keras.to_tflite import tflite_conversion
 from saltup.ai.utils.torch.to_onnx import convert_torch_to_onnx
@@ -27,15 +28,14 @@ from saltup.ai.object_detection.utils.metrics import Metric
 from saltup.ai.training.callbacks import _KerasCallbackAdapter, KFoldTrackingCallback
 from saltup.ai.training.app_callbacks import YoloEvaluationsCallback, ClassificationEvaluationsCallback
 
-
 def _train_model(
-    model:Union[tf.keras.models.Sequential, torch.nn.Module],
+    model:Union[keras.models.Sequential, torch.nn.Module],
     train_gen:BaseDatagenerator,
     val_gen:BaseDatagenerator,
     output_dir:str,
     epochs:int,
-    loss_function:Union[tf.keras.losses.Loss, torch.nn.Module],
-    optimizer:Union[tf.keras.optimizers.Optimizer, torch.optim.Optimizer],
+    loss_function:Union[keras.losses.Loss, torch.nn.Module],
+    optimizer:Union[keras.optimizers.Optimizer, torch.optim.Optimizer],
     scheduler:Union[torch.optim.lr_scheduler._LRScheduler, None],
     model_output_name:str=None,
     class_weight:dict=None,
@@ -45,13 +45,13 @@ def _train_model(
     Train the model.
 
     Args:
-        model (Union[tf.keras.models.Sequential, torch.nn.Module]): Model to be trained.
+        model (Union[keras.models.Sequential, torch.nn.Module]): Model to be trained.
         train_gen (BaseDatagenerator): Training data generator.
         val_gen (BaseDatagenerator): Validation data generator.
         output_dir (str): Directory to save the model.
         epochs (int): Number of epochs for training.
-        loss_function (Union[tf.keras.losses.Loss, torch.nn.Module]): Loss function for training.
-        optimizer (Union[tf.keras.optimizers.Optimizer, torch.optim.Optimizer]): Optimizer for training.
+        loss_function (Union[keras.losses.Loss, torch.nn.Module]): Loss function for training.
+        optimizer (Union[keras.optimizers.Optimizer, torch.optim.Optimizer]): Optimizer for training.
         scheduler (Union[torch.optim.lr_scheduler._LRScheduler, None]): Scheduler for the optimizer.
         model_output_name (str, optional): Name of the model. Defaults to None.
         class_weight (dict, optional): Class weights for training. Defaults to None.
@@ -64,7 +64,7 @@ def _train_model(
         model_output_name = 'model'
     saved_models_folder_path = os.path.join(output_dir, "saved_models")
     os.makedirs(saved_models_folder_path, exist_ok=True)
-    if isinstance(model, tf.keras.Model):
+    if isinstance(model, keras.Model):
         # === Keras model ===
         if optimizer is None or loss_function is None:
             raise ValueError("For Keras models, both `optimizer` and `loss_function` must be provided.")
@@ -81,14 +81,14 @@ def _train_model(
         )
         
         keras_callbacks = [
-            _KerasCallbackAdapter(cb) if not isinstance(cb, tf.keras.callbacks.Callback) else cb
+            _KerasCallbackAdapter(cb) if not isinstance(cb, keras.callbacks.Callback) else cb
             for cb in app_callbacks
         ]
         
         best_model_path = os.path.join(saved_models_folder_path, f'{model_output_name}_best.keras')
         last_epoch_model = os.path.join(saved_models_folder_path, f'{model_output_name}_last_epoch.keras')
 
-        save_best_clbk = tf.keras.callbacks.ModelCheckpoint(filepath=best_model_path, save_best_only=True)
+        save_best_clbk = keras.callbacks.ModelCheckpoint(filepath=best_model_path, save_best_only=True)
         
         # Merge default fit arguments with environment-defined ones
         SALTUP_TRAINING_KERAS_FIT_ARGS = {
@@ -123,14 +123,15 @@ def _train_model(
         return best_model_path
 
     elif isinstance(model, torch.nn.Module):
-        
+        if optimizer is None or loss_function is None:
+            raise ValueError("both `loss_function` and `optimizer` must be provided")
         # Get PyTorch training configuration
         pytorch_config = SaltupEnv.SALTUP_TRAINING_PYTORCH_ARGS
         
         context = CallbackContext(
             model=model,
             epochs=epochs,
-            batch_size=train_gen.dataset.batch_size,
+            batch_size=train_gen.dataset.batch_size if SaltupEnv.SALTUP_BACKEND == BackendType.TORCH else train_gen.batch_size,
             best_model=None,
             best_epoch=1,
             best_loss=None,
@@ -146,8 +147,8 @@ def _train_model(
         
         model = model.to(device)
         
-        best_model_path = os.path.join(saved_models_folder_path, f'{model_output_name}_best.pt')
-        last_epoch_model = os.path.join(saved_models_folder_path, f'{model_output_name}_last_epoch.pt')
+        best_model_path = os.path.join(saved_models_folder_path, f'{model_output_name}_best.pth')
+        last_epoch_model = os.path.join(saved_models_folder_path, f'{model_output_name}_last_epoch.pth')
         
         for callback in app_callbacks:
             callback.on_train_begin(context)
@@ -225,8 +226,11 @@ def _train_model(
                 patience_counter = 0
                 
                 # Save model
-                scripted = torch.jit.script(model.cpu())
-                scripted.save(best_model_path)
+                try:
+                    torch.save(model, best_model_path)
+                except:
+                    scripted = torch.jit.script(model.cpu())
+                    scripted.save(best_model_path)
             else:
                 patience_counter += 1
 
@@ -256,14 +260,19 @@ def _train_model(
             callback.on_train_end(context)
             
         # Save final model
-        scripted = torch.jit.script(model.cpu())
-        scripted.save(last_epoch_model)
+        try:
+            torch.save(model, last_epoch_model)
+            print('Saved trained model in a STANDARD format at {} '.format(last_epoch_model))
+        except:
+            scripted = torch.jit.script(model.cpu())
+            scripted.save(last_epoch_model)
+            print('Saved trained model in a SCRIPTED format at {} '.format(last_epoch_model))
 
         return best_model_path
             
 def training(
     train_DataGenerator:BaseDatagenerator,
-    model:Union[tf.keras.Model, torch.nn.Module],
+    model:Union[keras.Model, torch.nn.Module],
     loss_function:callable,
     optimizer:callable,
     epochs:int,     
@@ -280,7 +289,7 @@ def training(
 
     Args:
         train_DataGenerator (BaseDatagenerator): Training data generator.
-        model (Union[tf.keras.Model, torch.nn.Module]): Model instance (Keras or PyTorch).
+        model (Union[keras.Model, torch.nn.Module]): Model instance (Keras or PyTorch).
         loss_function (callable): Function that returns a loss function instance.
         optimizer (callable): Function that returns an optimizer instance.
         epochs (int): Number of epochs for training.
@@ -324,7 +333,7 @@ def training(
             fold_model = model
             fold_model_optimizer = optimizer
             fold_model_loss = loss_function
-            if isinstance(fold_model, torch.nn.Module):
+            if isinstance(fold_model, torch.nn.Module) and SaltupEnv.SALTUP_BACKEND == BackendType.TORCH:
                 train_generator = pytorch_DataGenerator(train_generator, batch_size=train_generator.batch_size, shuffle=True)
                 val_generator = pytorch_DataGenerator(val_generator, batch_size=val_generator.batch_size, shuffle=True)
             
@@ -354,27 +363,44 @@ def training(
         for i in range((len(kfolds))):
             if k_fold_results[i]['val_loss'] < best_val_loss:
                 best_val_loss = k_fold_results[i]['val_loss']
-                if isinstance(fold_model, tf.keras.Model):
+                if isinstance(fold_model, keras.Model):
                     golden_model_path = os.path.join(golden_model_folder, f'{model_output_name}.keras')
                     k_fold_results[i]['model'].save(golden_model_path)
-                elif isinstance(fold_model, torch.nn.Module):
+                elif isinstance(fold_model, torch.nn.Module) and SaltupEnv.SALTUP_BACKEND == BackendType.TORCH:
                     golden_model_path = os.path.join(golden_model_folder, f'{model_output_name}.pt')
                     scripted = torch.jit.script(k_fold_results[i]['model'].cpu())
                     scripted.save(golden_model_path)
         results_dict['models_paths'].append(golden_model_path)
-        if isinstance(fold_model, tf.keras.Model):
+        if isinstance(fold_model, keras.Model):
             golden_model_name = os.path.basename(golden_model_path).replace('.keras', '')       
             onnx_model_path = os.path.join(golden_model_folder, f'{golden_model_name}.onnx')
-            model_proto, _ = convert_keras_to_onnx(golden_model_path, onnx_model_path,SaltupEnv.SALTUP_ONNX_OPSET)
-            results_dict['models_paths'].append(onnx_model_path)
             
-            tflite_golden_model_path = os.path.join(golden_model_folder, f'{golden_model_name}.tflite')
-            tflite_model_path = tflite_conversion(
-                golden_model_path, 
-                tflite_golden_model_path
-            )
-            results_dict['models_paths'].append(tflite_model_path)
-        elif isinstance(fold_model, torch.nn.Module):
+            if SaltupEnv.SALTUP_BACKEND == BackendType.KERAS_TENSORFLOW:
+                model_proto, _ = convert_keras_to_onnx(golden_model_path, onnx_model_path,SaltupEnv.SALTUP_ONNX_OPSET)
+                results_dict['models_paths'].append(onnx_model_path)
+            elif SaltupEnv.SALTUP_BACKEND == BackendType.KERAS_TORCH:
+                golden_model = keras.models.load_model(golden_model_path, compile=False)
+                golden_model(train_generator[0][0])  # Run a dummy inference to build the model if not already built
+                golden_model.export(onnx_model_path, format="onnx")
+                results_dict['models_paths'].append(onnx_model_path)
+            
+            torch_model = convert(onnx_model_path)
+            torch_model.input_shape = golden_model.input_shape
+            torch_model.output_shape = golden_model.output_shape
+            torch_model.input_dtype = golden_model.input_dtype if hasattr(golden_model, 'input_dtype') else np.float32
+            torch_golden_model_path = os.path.join(golden_model_folder, f'{golden_model_name}.pth')
+            torch.save(torch_model, torch_golden_model_path)
+            results_dict['models_paths'].append(torch_golden_model_path)
+
+            if SaltupEnv.SALTUP_BACKEND == BackendType.KERAS_TENSORFLOW:
+                tflite_golden_model_path = os.path.join(golden_model_folder, f'{golden_model_name}.tflite')
+                tflite_model_path = tflite_conversion(
+                    golden_model_path,
+                    tflite_golden_model_path
+                )
+                results_dict['models_paths'].append(tflite_model_path)
+                
+        elif isinstance(fold_model, torch.nn.Module) and SaltupEnv.SALTUP_BACKEND == BackendType.TORCH:
             model_name = os.path.basename(golden_model_path).replace('.pt', '')
             onnx_model_path = os.path.join(golden_model_folder, f'{model_name}.onnx')
 
@@ -405,7 +431,7 @@ def training(
             train_datagenerator = train_DataGenerator
         
         training_model = model
-        if isinstance(training_model, torch.nn.Module):
+        if isinstance(training_model, torch.nn.Module) and SaltupEnv.SALTUP_BACKEND == BackendType.TORCH:
             print("PyTorch model detected.")
             if loss_function is None or optimizer is None:
                     raise ValueError("For PyTorch models, both `loss_function` and `optimizer` must be provided.")
@@ -428,22 +454,38 @@ def training(
             app_callbacks=training_callback
         )
         results_dict['models_paths'].append(model_path)
-        if isinstance(training_model, tf.keras.Model):
+        if isinstance(training_model, keras.Model):
             model_folder = os.path.dirname(model_path)
             model_name = os.path.basename(model_path).replace('.keras', '')
             onnx_model_path = os.path.join(model_folder, f'{model_name}.onnx')
-            model_proto, keras_model = convert_keras_to_onnx(model_path, onnx_model_path)
-            results_dict['models_paths'].append(onnx_model_path)
+            if SaltupEnv.SALTUP_BACKEND == BackendType.KERAS_TENSORFLOW:
+                model_proto, _ = convert_keras_to_onnx(model_path, onnx_model_path,SaltupEnv.SALTUP_ONNX_OPSET)
+                results_dict['models_paths'].append(onnx_model_path)
+            elif SaltupEnv.SALTUP_BACKEND == BackendType.KERAS_TORCH:
+                model = keras.models.load_model(model_path, compile=False)
+                model(train_datagenerator[0][0])  # Run a dummy inference to build the model if not already built
+                model.export(onnx_model_path, format="onnx")
+                results_dict['models_paths'].append(onnx_model_path)
             
-            tflite_model_path = os.path.join(model_folder, f'{model_name}.tflite')
-            tflite_model_path = tflite_conversion(
-                model_path, 
-                tflite_model_path
-            )
-            results_dict['models_paths'].append(tflite_model_path)
-        elif isinstance(training_model, torch.nn.Module):
+            
+            torch_model = convert(onnx_model_path)
+            torch_model.input_shape = model.input_shape
+            torch_model.output_shape = model.output_shape
+            torch_model.input_dtype = model.input_dtype if hasattr(model, 'input_dtype') else np.float32
+            torch_model_path = os.path.join(model_folder, f'{model_name}.pth')
+            torch.save(torch_model, torch_model_path)
+            results_dict['models_paths'].append(torch_model_path)
+            
+            if SaltupEnv.SALTUP_BACKEND == BackendType.KERAS_TENSORFLOW:
+                tflite_model_path = os.path.join(model_folder, f'{model_name}.tflite')
+                tflite_model_path = tflite_conversion(
+                    model_path, 
+                    tflite_model_path
+                )
+                results_dict['models_paths'].append(tflite_model_path)
+        elif isinstance(training_model, torch.nn.Module) and SaltupEnv.SALTUP_BACKEND == BackendType.TORCH:
             model_folder = os.path.dirname(model_path)
-            model_name = os.path.basename(model_path).replace('.pt', '')
+            model_name = os.path.basename(model_path).replace('.pth', '')
             onnx_model_path = os.path.join(model_folder, f'{model_name}.onnx')
 
             # Use the shape of a real batch from the validation dataloader as input shape for ONNX conversion

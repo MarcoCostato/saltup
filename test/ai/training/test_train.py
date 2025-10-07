@@ -1,10 +1,12 @@
 import pytest
 import os
+os.environ["SALTUP_BACKEND"] = "torch"
 import numpy as np
 from PIL import Image
 from unittest.mock import Mock, patch, MagicMock, PropertyMock
 
 import tensorflow as tf
+import keras
 import torch
 from torch import nn
 import torch.nn.functional as F
@@ -39,9 +41,9 @@ def mock_test_data_dir(tmp_path):
 @pytest.fixture
 def mock_keras_model():
     """Create a mock Keras model."""
-    model = tf.keras.Sequential([
-        tf.keras.layers.Flatten(input_shape=(32, 32, 3)),
-        tf.keras.layers.Dense(2, activation="softmax")
+    model = keras.Sequential([
+        keras.layers.Flatten(input_shape=(32, 32, 3)),
+        keras.layers.Dense(2, activation="softmax")
     ])
     return model
 
@@ -116,8 +118,8 @@ class TestTrainModel:
             mock_verbose.return_value = 0
             
             # Define loss function and optimizer
-            loss_function = tf.keras.losses.CategoricalCrossentropy()
-            optimizer = tf.keras.optimizers.Adam(learning_rate=0.001)
+            loss_function = keras.losses.CategoricalCrossentropy()
+            optimizer = keras.optimizers.Adam(learning_rate=0.001)
             
             # Train the model
             trained_model_path = _train_model(
@@ -177,7 +179,7 @@ class TestTrainModel:
             
             # Assertions
             assert os.path.exists(trained_model_path)
-            assert trained_model_path.endswith(".pt")
+            assert trained_model_path.endswith(".pth")
             assert os.path.exists(os.path.join(output_dir, "saved_models"))
         
     def test_train_model_keras_missing_optimizer(self, mock_keras_model, mock_keras_data_generator, tmp_path):
@@ -185,7 +187,7 @@ class TestTrainModel:
         output_dir = str(tmp_path / "output")
         os.makedirs(output_dir, exist_ok=True)
         
-        loss_function = tf.keras.losses.CategoricalCrossentropy()
+        loss_function = keras.losses.CategoricalCrossentropy()
         
         with pytest.raises(ValueError, match="both `optimizer` and `loss_function` must be provided"):
             _train_model(
@@ -227,8 +229,8 @@ class TestTrainingFunction:
             mock_tflite_conv.return_value = os.path.join(output_dir, "saved_models", "test_model_best.tflite")
             
             # Define loss function and optimizer
-            loss_function = tf.keras.losses.CategoricalCrossentropy()
-            optimizer = tf.keras.optimizers.Adam(learning_rate=0.001)
+            loss_function = keras.losses.CategoricalCrossentropy()
+            optimizer = keras.optimizers.Adam(learning_rate=0.001)
             
             # Train the model
             result = training(
@@ -311,8 +313,8 @@ class TestTrainingFunction:
             mock_tflite_conv.return_value = os.path.join(output_dir, "golden_model_folder", "test_model.tflite")
             
             # Define loss function and optimizer
-            loss_function = tf.keras.losses.CategoricalCrossentropy()
-            optimizer = tf.keras.optimizers.Adam(learning_rate=0.001)
+            loss_function = keras.losses.CategoricalCrossentropy()
+            optimizer = keras.optimizers.Adam(learning_rate=0.001)
             
             # Mock the split method to return proper generators
             mock_split_generators = [mock_keras_data_generator, mock_keras_data_generator]
@@ -341,8 +343,8 @@ class TestTrainingFunction:
         os.makedirs(output_dir, exist_ok=True)
         
         # Define loss function and optimizer
-        loss_function = tf.keras.losses.CategoricalCrossentropy()
-        optimizer = tf.keras.optimizers.Adam(learning_rate=0.001)
+        loss_function = keras.losses.CategoricalCrossentropy()
+        optimizer = keras.optimizers.Adam(learning_rate=0.001)
         
         with patch.object(type(SaltupEnv), 'SALTUP_TRAINING_KERAS_COMPILE_ARGS', new_callable=PropertyMock) as mock_compile, \
              patch.object(type(SaltupEnv), 'SALTUP_TRAINING_KERAS_FIT_ARGS', new_callable=PropertyMock) as mock_fit, \
@@ -400,8 +402,8 @@ class TestTrainingFunction:
         os.makedirs(output_dir, exist_ok=True)
         
         # Define loss function and optimizer
-        loss_function = tf.keras.losses.CategoricalCrossentropy()
-        optimizer = tf.keras.optimizers.Adam(learning_rate=0.001)
+        loss_function = keras.losses.CategoricalCrossentropy()
+        optimizer = keras.optimizers.Adam(learning_rate=0.001)
         
         with patch.object(type(SaltupEnv), 'SALTUP_TRAINING_KERAS_COMPILE_ARGS', new_callable=PropertyMock) as mock_compile, \
              patch.object(type(SaltupEnv), 'SALTUP_TRAINING_KERAS_FIT_ARGS', new_callable=PropertyMock) as mock_fit, \

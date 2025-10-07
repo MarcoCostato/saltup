@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
+import os
 import sys
 import argparse
-
 from saltup.utils import configure_logging
 from saltup.utils.misc import consolidate_files
 

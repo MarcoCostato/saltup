@@ -397,8 +397,8 @@ class AnchorsBasedDatagen(BaseDatagenerator):
     def merge(dg1, dg2):
         raise NotImplementedError
 
-
-from tensorflow.keras.utils import Sequence #type: ignore
+import keras
+from keras.utils import Sequence #type: ignore
 
 class KerasAnchorBasedDatagen(AnchorsBasedDatagen, Sequence):
     """
@@ -445,8 +445,23 @@ class KerasAnchorBasedDatagen(AnchorsBasedDatagen, Sequence):
         return super().__len__()
         
     def __getitem__(self, idx: int) -> Tuple[np.ndarray, np.ndarray]:
-        # Use AnchorsBasedDataloader's __getitem__ method
-        return super().__getitem__(idx)
+        images, labels = super().__getitem__(idx)
+
+        # If an extra outer batching dimension is present (e.g. (outer_batch, inner_batch, H, W, C)),
+        # merge the first two dimensions to produce a single batch dimension.
+        # if images.ndim == 5:
+        #     print("Warning: Merging outer and inner batch dimensions for Keras compatibility.")
+        #     outer, inner = images.shape[0], images.shape[1]
+        #     images = images.reshape((outer * inner,) + images.shape[2:])
+        #     labels = labels.reshape((outer * inner,) + labels.shape[2:])
+
+        # If using a torch backend with channels-last numpy arrays (B,H,W,C) convert to (B,C,H,W)
+        # if keras.backend.backend() == "torch":
+        #     images = images.transpose(0, 3, 1, 2)  # (B,H,W,C) -> (B,C,H,W)
+
+
+        # print(images.shape, labels.shape)
+        return images, labels
         
     def on_epoch_end(self) -> None:
         # Use AnchorsBasedDataloader's on_epoch_end method
@@ -475,6 +490,7 @@ class PyTorchAnchorBasedDatagen(AnchorsBasedDatagen, Dataset):
         target_size: Tuple[int, int],
         grid_size: Tuple[int, int],
         num_classes: int,
+        batch_size : int = 1,
         preprocess: callable = None,
         transform: A.Compose = None
     ):

@@ -1,4 +1,6 @@
 import pytest
+import os
+os.environ["SALTUP_BACKEND"] = "keras_tensorflow"
 import numpy as np
 import matplotlib.pyplot as plt
 import matplotlib.patches as patches

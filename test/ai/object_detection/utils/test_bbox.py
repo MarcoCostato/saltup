@@ -2,6 +2,8 @@ import pytest
 import json
 import numpy as np
 from typing import Tuple
+import os
+os.environ["SALTUP_BACKEND"] = "keras_tensorflow"
 
 from saltup.ai.object_detection.utils.bbox import BBox, BBoxFormat, IoUType
 from saltup.ai.object_detection.utils.bbox import nms, convert_matrix_boxes

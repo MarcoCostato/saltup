@@ -1,6 +1,8 @@
 import pytest
 from typing import List, Tuple, Optional
 import numpy as np
+import os
+os.environ["SALTUP_BACKEND"] = "keras_tensorflow"
 
 from saltup.ai.object_detection.yolo.yolo import YoloOutput
 from saltup.ai.object_detection.utils.bbox  import BBoxFormat, BBox, BBoxClassIdScore

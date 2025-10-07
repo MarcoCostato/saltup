@@ -7,6 +7,7 @@ for both Keras and PyTorch training arguments.
 """
 
 import os
+os.environ["SALTUP_BACKEND"] = "keras_tensorflow"
 import json
 from pathlib import Path
 from saltup.saltup_env import SaltupEnv

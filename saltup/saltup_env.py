@@ -1,4 +1,5 @@
 import os
+from enum import IntEnum
 
 try:
     from importlib.metadata import version, PackageNotFoundError
@@ -15,10 +16,33 @@ def _get_version_from_metadata():
     except PackageNotFoundError:
         return "unknown"
 
- 
+class BackendType(IntEnum):
+    KERAS_TENSORFLOW = 1
+    KERAS_TORCH = 2
+    KERAS_JAX = 3
+    TORCH = 4
+
+    @classmethod
+    def from_string(cls, backend_str: str) -> "BackendType":
+        """Convert a human-readable string to the BackendType enum."""
+        if backend_str == "keras_tensorflow":
+            return cls.KERAS_TENSORFLOW
+        elif backend_str == "keras_torch":
+            return cls.KERAS_TORCH
+        elif backend_str == "keras_jax":
+            return cls.KERAS_JAX
+        elif backend_str == "torch":
+            return cls.TORCH
+        else:
+            return 0
+            
+
 class _SaltupEnv:
     _instance = None
-
+    
+    def __init__(self):
+        self.SALTUP_BACKEND
+        
     def __new__(cls):
         if cls._instance is None:
             cls._instance = super(_SaltupEnv, cls).__new__(cls)
@@ -31,6 +55,10 @@ class _SaltupEnv:
     @property
     def SALTUP_KERAS_TRAIN_SHUFFLE(self):
         return os.getenv("SALTUP_KERAS_TRAIN_SHUFFLE", "True").lower() in ("true", "1", "yes")
+    
+    @property
+    def SALTUP_KERAS_TO_ONNX(self):
+        return os.getenv("SALTUP_KERAS_TO_ONNX", "True").lower() in ("true", "1", "yes")
     
     @property
     def SALTUP_KERAS_TRAIN_VERBOSE(self):
@@ -154,6 +182,39 @@ class _SaltupEnv:
                 return defaults
             except json.JSONDecodeError:
                 return defaults
-    
+            
+    @property
+    def SALTUP_BACKEND(self):
+        """
+        Backend to use.
+        Set via environment variable SALTUP_BACKEND.
+        Options: 'keras_tensorflow', 'keras_torch', 'keras_jax', 'torch'
+        Default: ""
+        Returns: BACKEND enum value
+        """
+        # Set KERAS_BACKEND environment variable immediately if SALTUP_BACKEND is set
+        backend_str = os.getenv("SALTUP_BACKEND", "").lower()
+        backend_int = BackendType.from_string(backend_str)
+        if backend_int == BackendType.KERAS_TENSORFLOW:
+            os.environ["KERAS_BACKEND"] = "tensorflow" 
+            print("SALTUP_BACKEND set to 'keras_tensorflow'. Using TensorFlow as Keras backend.")
+            return backend_int
+        elif backend_int == BackendType.KERAS_TORCH:
+            os.environ["KERAS_BACKEND"] = "torch"
+            print("SALTUP_BACKEND set to 'keras_torch'. Using PyTorch as Keras backend.")
+            return backend_int
+        elif backend_int == BackendType.KERAS_JAX:
+            os.environ["KERAS_BACKEND"] = "jax"
+            print("SALTUP_BACKEND set to 'keras_jax'. Using JAX as Keras backend.")
+            return backend_int
+        elif backend_int == BackendType.TORCH:
+            print("SALTUP_BACKEND set to 'torch'. Using PyTorch directly.")
+            return backend_int
+        else:
+            os.environ["KERAS_BACKEND"] = "tensorflow"
+            print("SALTUP_BACKEND set to default mode 'keras_tensorflow'. Using TensorFlow as Keras backend.")
+            #raise ValueError(f"Unsupported SALTUP_BACKEND value: {backend_str}. Supported values are 'keras_tensorflow', 'keras_torch', 'keras_jax', 'torch'.")
+
+
 # Create a singleton instance for easy access
 SaltupEnv = _SaltupEnv()

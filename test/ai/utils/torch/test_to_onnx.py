@@ -1,4 +1,5 @@
 import os
+os.environ["SALTUP_BACKEND"] = "keras_tensorflow"
 import tempfile
 import torch
 from saltup.ai.utils.torch.to_onnx import convert_torch_to_onnx

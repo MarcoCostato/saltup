@@ -1,5 +1,6 @@
 import pytest
 import numpy as np
+import os
 from saltup.utils.data.image.image_utils import Image, ColorMode
 from saltup.ai.classification.dataloader import ClassificationDataloader
 import cv2
