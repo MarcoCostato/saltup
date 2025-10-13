@@ -10,6 +10,8 @@ from collections import defaultdict, Counter, OrderedDict
 from typing import Iterable, Union, List, Dict, Optional, Tuple, Set
 
 from saltup.utils.data.image.image_utils import Image
+from saltup.utils.data.s3.s3_utils import S3
+from botocore.exceptions import ClientError
 from saltup.ai.object_detection.utils.bbox import BBox, BBoxClassId, BBoxFormat
 from saltup.ai.base_dataformat.base_dataloader import BaseDataloader, ColorMode
 from saltup.ai.base_dataformat.base_dataset import Dataset
@@ -168,6 +170,199 @@ class YoloDarknetLoader(BaseDataloader):
             
         return image_label_pairs
 
+
+class YoloDarknetS3Loader(BaseDataloader, S3):
+    def __init__(
+        self,
+        bucket_name:str,
+        images_dir: str,
+        labels_dir: str, 
+        aws_access_key_id:str =None,
+        aws_secret_access_key:str =None,
+        aws_credential_filepath:str ="~/.aws/credentials",
+        section: str='default',
+        download_file: bool = False,
+        color_mode: ColorMode = ColorMode.RGB
+    ):
+        """
+        Initialize YoloDarknetS3Loader for datasets stored on S3.
+
+        Args:
+            bucket_name: Name of the S3 bucket
+            images_dir: Local directory for images (downloaded from S3)
+            labels_dir: Local directory for labels (downloaded from S3)
+            aws_access_key_id: AWS access key ID (optional)
+            aws_secret_access_key: AWS secret access key (optional)
+            aws_credential_filepath: Path to AWS credentials file (default: ~/.aws/credentials)
+            section: Section in AWS credentials file (default: 'default')
+            download_file: If True, download files from S3 to local directories
+            color_mode: Color mode for loading images
+
+        Raises:
+            FileNotFoundError: If local directories don't exist after download
+        """
+        # Initialize S3 parent
+        S3.__init__(
+            self,
+            bucket_name=bucket_name,
+            aws_access_key_id=aws_access_key_id,
+            aws_secret_access_key=aws_secret_access_key,
+            aws_credential_filepath=aws_credential_filepath,
+            section=section
+        )
+
+        self.__logger = configure_logging.get_logger(__name__)
+        self.__logger.info("Initializing YOLO Darknet dataset loader")
+        
+        # # Validate directories existence
+        # if not os.path.exists(images_dir):
+        #     raise FileNotFoundError(f"Images directory not found: {images_dir}")
+        # if not os.path.exists(labels_dir):
+        #     raise FileNotFoundError(f"Labels directory not found: {labels_dir}")
+            
+        self._images_dir = Path(images_dir)
+        self._labels_dir = Path(labels_dir)
+        self.color_mode = color_mode
+        self._current_index = 0
+        
+        # Load image-label pairs
+        self.image_label_pairs = self._load_image_label_pairs()
+        self.__logger.info(f"Found {len(self.image_label_pairs)} image-label pairs")
+
+    def __iter__(self):
+        """Return iterator object (self in this case)."""
+        self._current_index = 0  # Reset position when creating new iterator
+        return self
+
+    def __next__(self) -> Tuple[Image, List[BBoxClassId]]:
+        """Get next item from dataset."""
+        if self._current_index >= len(self.image_label_pairs):
+            self._current_index = 0  # Reset for next iteration
+            raise StopIteration
+        
+        image, annotations = self._load_item(self._current_index) 
+        self._current_index += 1
+        
+        return image, annotations
+    
+    def __getitem__(self, idx: Union[int, slice])-> Union[
+        Tuple[Image, List[BBoxClassId]],
+        List[Tuple[Image, List[BBoxClassId]]]
+    ]:
+        """Get item(s) by index.
+        
+        Args:
+            idx: Integer index or slice object
+            
+        Returns:
+            Single (image, annotations) tuple or list of tuples if slice
+            
+        Raises:
+            IndexError: If index out of range
+        """
+        if isinstance(idx, slice):
+            # Handle slice
+            indices = range(*idx.indices(len(self)))
+            return [self._load_item(i) for i in indices]
+        else:
+            # Handle single index
+            return self._load_item(idx)
+        
+    def _load_item(self, idx: int)-> Tuple[Image, List[BBoxClassId]]:
+        """Load single item by index.
+        
+        Args:
+            idx: Index of the item to load
+            
+        Returns:
+            Tuple of (image, annotations)
+            
+        Raises:
+            IndexError: If index out of range
+        """
+        if idx < 0:
+            idx += len(self)
+        if not 0 <= idx < len(self):
+            raise IndexError("Index out of range")
+        
+        image_path, label_path = self.image_label_pairs[idx]
+        image = self.load_image(image_path, self.color_mode)
+        image_width, image_height = image.get_width(), image.get_height()
+        
+        annotations = [BBoxClassId(
+            # (class_id, xc, yc, w, h)
+            coordinates=lbl[1:],
+            class_id=lbl[0],
+            class_name=None,
+            fmt=BBoxFormat.YOLO,
+            img_width=image_width,
+            img_height=image_height
+        ) for lbl in read_label(label_path)]
+        
+        return image, annotations        
+
+    def __len__(self):
+        """Return total number of samples in dataset."""
+        return len(self.image_label_pairs)
+    
+    def split(self, ratio):
+        raise NotImplementedError("Not implemented yet")
+    
+    @staticmethod
+    def merge(YoloDarknetLoader1, YoloDarknetLoader2) -> 'YoloDarknetLoader':
+        """Merge two YoloDarknetLoader instances into one.
+        
+        Args:
+            YoloDarknetLoader1: First loader instance
+            YoloDarknetLoader2: Second loader instance
+        """
+        raise NotImplementedError("Merging not implemented yet")
+    
+    def _load_image_label_pairs(self) -> List[Tuple[str, str]]:
+        """
+        Load pairs from images and labels directories.
+        
+        Returns:
+            List of tuples containing (image_path, label_path) pairs
+        """
+        image_label_pairs = []
+        skipped_images = 0
+        
+        for image_file in os.listdir(self._images_dir):
+            if image_file.endswith(('.jpg', '.jpeg', '.png')):
+                base_name = os.path.splitext(image_file)[0]
+                image_path = str(self._images_dir / image_file)
+                label_path = str(self._labels_dir / f"{base_name}.txt")
+                try:
+                    # Check if the object exists and is reachable in S3
+                    self._client.head_object(Bucket=self._bucket_name, Key=image_path)
+                    image_exists = True 
+                except ClientError as e:
+                # file not found
+                    if e.response['Error']['Code'] == "NoSuchKey":
+                        skipped_images += 1
+                        self.logger.warning(f"S3 image not found: {image_path}")
+                        continue
+                try:
+                    # Check if the object exists and is reachable in S3
+                    self._client.head_object(Bucket=self._bucket_name, Key=label_path)
+                    label_exists = True
+                except ClientError as e:
+                # file not found
+                    if e.response['Error']['Code'] == "NoSuchKey":
+                        skipped_images += 1
+                        self.logger.warning(f"S3 label not found: {label_path}")
+                        continue
+                if image_exists and label_exists:
+                    image_label_pairs.append((image_path, label_path))
+                else:
+                    skipped_images += 1
+                    self.__logger.warning(f"Label not found for {image_file}")
+        
+        if skipped_images > 0:
+            self.__logger.warning(f"Skipped {skipped_images} images due to missing labels")
+            
+        return image_label_pairs
 
 class YoloDataset(Dataset):
     def __init__(self, images_dir: str, labels_dir: str, refresh_each: int = -1):

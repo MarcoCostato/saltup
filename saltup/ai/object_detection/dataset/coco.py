@@ -30,6 +30,8 @@ from pathlib import Path
 from collections import defaultdict, OrderedDict
 from typing import Dict, List, Tuple, Optional, Union
 
+from saltup.utils.data.s3.s3_utils import S3
+from botocore.exceptions import ClientError
 from saltup.utils.data.image.image_utils import Image
 from saltup.ai.object_detection.utils.bbox import BBox, BBoxClassId, BBoxFormat
 from saltup.ai.base_dataformat.base_dataloader import BaseDataloader, ColorMode
@@ -119,17 +121,16 @@ class COCOLoader(BaseDataloader):
     
     def _load_item(self, idx: int) -> Tuple[Image, List[BBoxClassId]]:
         """Load single item by index.
-        
-        A differenza di YOLO e Pascal VOC, non necessitiamo di caricare e parsare
-        file di annotazione poiché le annotazioni sono già state processate in
-        _create_image_annotation_pairs().
-        
+
+        Unlike YOLO and Pascal VOC, we do not need to load and parse annotation files
+        because the annotations have already been processed in _create_image_annotation_pairs().
+
         Args:
             idx: Index of the item to load
-            
+
         Returns:
             Tuple of (image, annotations)
-            
+
         Raises:
             IndexError: If index out of range
         """
@@ -209,6 +210,228 @@ class COCOLoader(BaseDataloader):
         return image_annotation_pairs
 
 
+
+class COCOS3Loader(BaseDataloader, S3):
+    def __init__(
+        self,
+        bucket_name:str,
+        images_dir: str,
+        annotations_file: str, 
+        aws_access_key_id:str =None,
+        aws_secret_access_key:str =None,
+        aws_credential_filepath:str ="~/.aws/credentials",
+        section: str='default',
+        download_file: bool = False,
+        color_mode: ColorMode = ColorMode.RGB
+    ):
+        """
+        Initialize COCO dataset loader from S3.
+
+        Args:
+            bucket_name: Name of the S3 bucket
+            images_dir: Local directory to store images
+            annotations_file: Local path to COCO annotations JSON file
+            aws_access_key_id: AWS access key ID (optional)
+            aws_secret_access_key: AWS secret access key (optional)
+            aws_credential_filepath: Path to AWS credentials file (default: ~/.aws/credentials)
+            section: Section in AWS credentials file (default: 'default')
+            download_file: Whether to download files from S3 if not present locally
+            color_mode: Color mode for loading images
+
+        Raises:
+            ValueError: If paths are invalid
+            FileNotFoundError: If directories or files don't exist
+        """
+        # Initialize S3
+        S3.__init__(
+            self,
+            bucket_name=bucket_name,
+            aws_access_key_id=aws_access_key_id,
+            aws_secret_access_key=aws_secret_access_key,
+            aws_credential_filepath=aws_credential_filepath,
+            section=section
+        )
+
+        self.logger = logging.getLogger(__name__)
+        self.logger.info("Initializing COCO dataset loader")
+        
+        # Validate input paths
+        # if not os.path.exists(images_dir):
+        #     raise FileNotFoundError(f"Images directory not found: {images_dir}")
+        # if not os.path.exists(annotations_file):
+        #     raise FileNotFoundError(f"Annotations file not found: {annotations_file}")
+            
+        self.image_dir = Path(images_dir)
+        self.annotations_file = Path(annotations_file)
+        self.color_mode = color_mode
+        self._current_index = 0
+        
+        # Load annotations and create pairs
+        self.annotations = self._load_annotations()
+        self.image_annotation_pairs = self._create_image_annotation_pairs()
+        
+        self.logger.info(f"Found {len(self.image_annotation_pairs)} image-annotation pairs")
+
+    def __iter__(self):
+        """Return iterator object (self in this case)."""
+        self._current_index = 0  # Reset position when creating new iterator
+        return self
+
+    def __next__(self) -> Tuple[Image, List[BBoxClassId]]:
+        """Get next item from dataset."""
+        if self._current_index >= len(self.image_annotation_pairs):
+            self._current_index = 0  # Reset for next iteration
+            raise StopIteration
+        
+        image_path, annotations = self._load_item(self._current_index)
+        self._current_index += 1
+        return image_path, annotations
+
+    def __len__(self):
+        """Return total number of samples in dataset."""
+        return len(self.image_annotation_pairs)
+    
+    def __getitem__(self, idx: Union[int, slice]) -> Union[
+        Tuple[str, List[BBoxClassId]],
+        List[Tuple[str, List[BBoxClassId]]]
+    ]:
+        """Get item(s) by index.
+        
+        Args:
+            idx: Integer index or slice object
+            
+        Returns:
+            Single (image, annotations) tuple or list of tuples if slice
+            
+        Raises:
+            IndexError: If index out of range
+        """
+        if isinstance(idx, slice):
+            # Handle slice
+            indices = range(*idx.indices(len(self)))
+            return [self._load_item(i) for i in indices]
+        else:
+            # Handle single index
+            return self._load_item(idx)
+    
+    def _load_item(self, idx: int) -> Tuple[Image, List[BBoxClassId]]:
+        """Load single item by index.
+        
+        A differenza di YOLO e Pascal VOC, non necessitiamo di caricare e parsare
+        file di annotazione poiché le annotazioni sono già state processate in
+        _create_image_annotation_pairs().
+        
+        Args:
+            idx: Index of the item to load
+            
+        Returns:
+            Tuple of (image, annotations)
+            
+        Raises:
+            IndexError: If index out of range
+        """
+        if idx < 0:
+            idx += len(self)
+        if not 0 <= idx < len(self):
+            raise IndexError("Index out of range")
+            
+        image_path, annotations = self.image_annotation_pairs[idx]
+        
+        return image_path, annotations
+
+    def _load_annotations(self) -> Dict:
+        """Load COCO annotations from JSON file."""
+        try:
+            obj = self._client.get_object(Bucket=self._bucket_name, Key=str(self.annotations_file))
+            content = obj['Body'].read().decode("utf-8")
+            
+        except ClientError as e:
+            if e.response['Error']['Code'] == "NoSuchKey":
+                self.logger.warning(f"S3 annotation file not found: {self.annotations_file}")
+        try:
+            annotations = json.loads(content)
+            required_keys = ["images", "annotations", "categories"]
+            if not all(key in annotations for key in required_keys):
+                raise ValueError(f"Invalid COCO format. Missing one or more required keys: {required_keys}")
+                
+            return annotations
+        except json.JSONDecodeError:
+            self.logger.error(f"Invalid JSON format in annotation file: {self.annotations_file}")
+            raise
+        except Exception as e:
+            self.logger.error(f"Error loading annotations from {self.annotations_file}: {str(e)}")
+            raise
+        
+    def get_list_pairs(self) -> List[Tuple[str, List[BBoxClassId]]]:
+        """
+        Get list of image-annotation pairs.
+
+        Returns:
+            List of tuples containing (image_path, annotations) pairs
+        """
+        list_images_path = []
+        list_annotations = []
+        for image_path, annotations in self.image_annotation_pairs:
+            list_images_path.append(image_path)
+            list_annotations.append(annotations)
+        
+        return list_images_path, list_annotations
+    
+    def split(self, ratio):
+        raise NotImplementedError("Splitting COCO datasets is not implemented yet")
+    
+    @staticmethod
+    def merge(coco_dl1, coco_dl2) -> 'COCOLoader': 
+        """Merge multiple COCO datasets into one."""
+        raise NotImplementedError("Merging COCO datasets is not implemented yet")
+    
+    def _create_image_annotation_pairs(self) -> List[Tuple[str, List[Dict]]]:
+        """
+        Create pairs of image paths and their corresponding annotations for S3.
+
+        Returns:
+            List of tuples containing (image_path, annotations_list) pairs
+        """
+        image_annotation_pairs = []
+
+        # Create a mapping from image_id to annotations
+        image_to_annotations = defaultdict(list)
+        for ann in self.annotations['annotations']:
+            image_to_annotations[ann['image_id']].append(ann)
+
+        skipped_images = 0
+        for img in self.annotations['images']:
+            s3_image_path = os.path.join(str(self.image_dir), img['file_name'])
+            try:
+                # Check if the object exists and is reachable in S3
+                self._client.head_object(Bucket=self._bucket_name, Key=s3_image_path)
+                image_exists = True 
+            except ClientError as e:
+                # file not found
+                if e.response['Error']['Code'] == "NoSuchKey":
+                    skipped_images += 1
+                    self.logger.warning(f"S3 image not found: {img['file_name']}")
+                    continue
+            if image_exists:
+                annotations = [BBoxClassId(
+                    coordinates=annotation_raw['bbox'],
+                    class_id=annotation_raw['category_id'],
+                    img_height=img['height'],
+                    img_width=img['width'],
+                    fmt=BBoxFormat.TOPLEFT_ABSOLUTE
+                ) for annotation_raw in image_to_annotations[img['id']]]
+                image_annotation_pairs.append(
+                    (s3_image_path, annotations)
+                )
+            else:
+                skipped_images += 1
+                self.logger.warning(f"S3 image not found: {img['file_name']}")
+
+        if skipped_images > 0:
+            self.logger.warning(f"Skipped {skipped_images} images due to missing files in S3")
+
+        return image_annotation_pairs
+    
 def create_dataset_structure(root_dir: str) -> Dict:
     """Creates COCO dataset directory structure.
 
