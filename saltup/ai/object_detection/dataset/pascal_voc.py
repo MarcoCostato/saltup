@@ -258,9 +258,9 @@ class PascalVOCS3Loader(BaseDataloader, S3):
             self._current_index = 0  # Reset for next iteration
             raise StopIteration
             
-        image, annotations = self._load_item(self._current_index)
-        self._current_index += 1        
-        return image, annotations
+        image_path, annotations = self._load_item(self._current_index)
+        self._current_index += 1
+        return image_path, annotations
 
     def __len__(self):
         """Return total number of samples in dataset."""

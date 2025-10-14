@@ -222,6 +222,7 @@ class COCOS3Loader(BaseDataloader, S3):
         aws_credential_filepath:str ="~/.aws/credentials",
         section: str='default',
         download_file: bool = False,
+        dest_folder_path: str = None,
         color_mode: ColorMode = ColorMode.RGB
     ):
         """
@@ -251,7 +252,9 @@ class COCOS3Loader(BaseDataloader, S3):
             aws_credential_filepath=aws_credential_filepath,
             section=section
         )
-
+        self.download_files_from_S3 = download_file
+        self.dest_folder_path = dest_folder_path
+        
         self.logger = logging.getLogger(__name__)
         self.logger.info("Initializing COCO dataset loader")
         
@@ -343,6 +346,20 @@ class COCOS3Loader(BaseDataloader, S3):
             
         image_path, annotations = self.image_annotation_pairs[idx]
         
+        if self.download_files_from_S3:
+            local_image_path = os.path.join(self.dest_folder_path, os.path.basename(image_path))
+            if not os.path.exists(local_image_path):
+                try:
+                    self.download_file(
+                        file_path=image_path,
+                        destination_path=local_image_path
+                    )
+                    self.logger.info(f"Downloaded {image_path} to {local_image_path}")
+                except ClientError as e:
+                    self.logger.error(f"Failed to download {image_path} from S3: {str(e)}")
+                    raise
+            image = self.load_image(local_image_path, self.color_mode)
+            return image, annotations
         return image_path, annotations
 
     def _load_annotations(self) -> Dict:

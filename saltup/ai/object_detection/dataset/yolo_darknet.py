@@ -182,6 +182,7 @@ class YoloDarknetS3Loader(BaseDataloader, S3):
         aws_credential_filepath:str ="~/.aws/credentials",
         section: str='default',
         download_file: bool = False,
+        dest_folder_path: str = None,
         color_mode: ColorMode = ColorMode.RGB
     ):
         """
@@ -210,7 +211,10 @@ class YoloDarknetS3Loader(BaseDataloader, S3):
             aws_credential_filepath=aws_credential_filepath,
             section=section
         )
-
+        
+        self.download_files_from_S3 = download_file
+        self.dest_folder_path = dest_folder_path
+        
         self.__logger = configure_logging.get_logger(__name__)
         self.__logger.info("Initializing YOLO Darknet dataset loader")
         
@@ -240,11 +244,12 @@ class YoloDarknetS3Loader(BaseDataloader, S3):
             self._current_index = 0  # Reset for next iteration
             raise StopIteration
         
-        image, annotations = self._load_item(self._current_index) 
+        image_path, annotations = self._load_item(self._current_index)
+
         self._current_index += 1
-        
-        return image, annotations
-    
+
+        return image_path, annotations
+
     def __getitem__(self, idx: Union[int, slice])-> Union[
         Tuple[Image, List[BBoxClassId]],
         List[Tuple[Image, List[BBoxClassId]]]
@@ -286,8 +291,32 @@ class YoloDarknetS3Loader(BaseDataloader, S3):
             raise IndexError("Index out of range")
         
         image_path, label_path = self.image_label_pairs[idx]
-        image = self.load_image(image_path, self.color_mode)
-        image_width, image_height = image.get_width(), image.get_height()
+        if self.download_files_from_S3:
+            local_image_path = os.path.join(self.dest_folder_path, os.path.basename(image_path))
+            if not os.path.exists(local_image_path):
+                try:
+                    self.download_file(
+                        file_path=image_path,
+                        destination_path=local_image_path
+                    )
+                    self.logger.info(f"Downloaded {image_path} to {local_image_path}")
+                except ClientError as e:
+                    self.logger.error(f"Failed to download {image_path} from S3: {str(e)}")
+                    raise
+            image = self.load_image(local_image_path, self.color_mode)
+            image_width, image_height = image.get_width(), image.get_height()   
+        
+        local_label_path = os.path.join(self.dest_folder_path, os.path.basename(label_path))
+        if self.download_files_from_S3 and not os.path.exists(local_label_path):
+            try:
+                self.download_file(
+                    file_path=label_path,
+                    destination_path=local_label_path
+                )
+                self.logger.info(f"Downloaded {label_path} to {local_label_path}")
+            except ClientError as e:
+                self.logger.error(f"Failed to download {label_path} from S3: {str(e)}")
+                raise
         
         annotations = [BBoxClassId(
             # (class_id, xc, yc, w, h)
@@ -295,11 +324,13 @@ class YoloDarknetS3Loader(BaseDataloader, S3):
             class_id=lbl[0],
             class_name=None,
             fmt=BBoxFormat.YOLO,
-            img_width=image_width,
-            img_height=image_height
-        ) for lbl in read_label(label_path)]
+            img_width=image_width if image_width else None,
+            img_height=image_height if image_height else None
+        ) for lbl in read_label(local_label_path)]
         
-        return image, annotations        
+        if self.download_files_from_S3:
+            return image, annotations
+        return image_path, annotations        
 
     def __len__(self):
         """Return total number of samples in dataset."""
