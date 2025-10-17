@@ -226,7 +226,7 @@ class TestPascalVOCLoader:
         assert len(loader) == 3
 
         # Test iteration
-        for image, annotations in loader:
+        for _, image, annotations in loader:
             assert isinstance(image, SaltupImage)
             assert isinstance(image.get_data(), np.ndarray)
             assert len(annotations) == 2  # Two objects per annotation
@@ -285,11 +285,11 @@ class TestPascalVOCLoader:
         )
 
         # First iteration
-        first_images = [img for img, _ in loader]
+        first_images = [img for _, img, _ in loader]
         assert len(first_images) == 3
 
         # Second iteration
-        second_images = [img for img, _ in loader]
+        second_images = [img for _, img, _ in loader]
         assert len(second_images) == 3
 
         # Compare iterations
@@ -325,7 +325,7 @@ class TestPascalVOCLoader:
 
         # Check first image of each loader
         for loader in [loader_rgb, loader_bgr, loader_gray]:
-            image, _ = next(iter(loader))
+            _, image, _ = next(iter(loader))
             assert isinstance(image, SaltupImage)
             image_array = image.get_data()
             assert isinstance(image_array, np.ndarray)

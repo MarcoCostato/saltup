@@ -329,7 +329,7 @@ class TestYOLODarknetLoader:
         assert len(loader) == 4  # Based on sample_dataset fixture
         
         # Test iteration
-        for image, labels in loader:
+        for image_path, image, labels in loader:
             assert isinstance(image, SaltupImage)
             assert isinstance(image.get_data(), np.ndarray)
             assert len(labels) > 0  # Each image has at least one label
@@ -381,7 +381,7 @@ class TestYOLODarknetLoader:
         
         # Check first image of each loader
         for loader in [loader_rgb, loader_bgr, loader_gray]:
-            image, _ = next(iter(loader))
+            _, image, _ = next(iter(loader))
             assert isinstance(image, SaltupImage)
             image_array = image.get_data()
             assert isinstance(image_array, np.ndarray)
@@ -434,11 +434,11 @@ class TestYOLODarknetLoader:
         )
         
         # First iteration
-        first_images = [img for img, _ in loader]
+        first_images = [img for _, img, _ in loader]
         assert len(first_images) == 4
         
         # Second iteration
-        second_images = [img for img, _ in loader]
+        second_images = [img for _, img, _ in loader]
         assert len(second_images) == 4
         
         # Compare iterations

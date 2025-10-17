@@ -1,6 +1,6 @@
 import pytest
 import os
-os.environ["SALTUP_BACKEND"] = "torch"
+#os.environ["SALTUP_BACKEND"] = "torch"
 import numpy as np
 from PIL import Image
 from unittest.mock import Mock, patch, MagicMock, PropertyMock
@@ -217,7 +217,7 @@ class TestTrainingFunction:
              patch.object(type(SaltupEnv), 'SALTUP_ONNX_OPSET', new_callable=PropertyMock) as mock_opset, \
              patch('saltup.ai.training.train.convert_keras_to_onnx') as mock_onnx_conv, \
              patch('saltup.ai.training.train.tflite_conversion') as mock_tflite_conv:
-            
+
             mock_compile.return_value = {}
             mock_fit.return_value = {}
             mock_shuffle.return_value = True
@@ -243,7 +243,7 @@ class TestTrainingFunction:
                 validation=[0.8, 0.2],
                 kfold_param={'enable': False},
                 model_output_name="test_model"
-            )
+            ) 
             
             # Assertions
             assert result['kfolds'] is False
