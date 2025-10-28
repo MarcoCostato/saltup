@@ -231,10 +231,10 @@ def convert_matrix_boxes(box_xy, box_wh):
 class BBox:
     def __init__(
         self,
-        coordinates: Union[List, Tuple, np.ndarray] = None,
+        coordinates: Optional[Union[List, Tuple, np.ndarray]] = None,
         fmt: BBoxFormat = BBoxFormat.YOLO,
-        img_height: int = None,
-        img_width: int = None
+        img_height: Optional[int] = None,
+        img_width: Optional[int] = None
     ):
         """
         Initialize a BBox object with coordinates and format.
@@ -927,7 +927,7 @@ class BBox:
         coordinates: Union[List, Tuple],
         from_fmt: BBoxFormat,
         to_fmt: BBoxFormat,
-        img_shape: tuple = None
+        img_shape: Optional[Tuple[int, int]] = None
     ) -> Tuple[float, float, float, float]:
         """
         Converts bounding box coordinates from one format and scale to another.
@@ -991,7 +991,7 @@ class BBox:
             else:
                 new_coordinates = BBox.absolute(new_coordinates, img_width, img_height, current_format)
         
-        return tuple(new_coordinates)
+        return new_coordinates
 
     def get_coordinates(self, fmt: BBoxFormat = BBOX_INNER_FORMAT) -> Tuple[float, float, float, float]:
         """
@@ -1026,8 +1026,8 @@ class BBox:
         self,
         coordinates: Union[List, Tuple, np.ndarray],
         fmt: BBoxFormat,
-        img_height: int = None,
-        img_width: int = None
+        img_height: Optional[int] = None,
+        img_width: Optional[int] = None
     ):
         """
         Set the bounding box coordinates.
@@ -1137,8 +1137,8 @@ class BBoxClassId(BBox):
     def __init__(
         self,
         coordinates: Union[List, Tuple],
-        class_id: int,
-        class_name: Optional[str] = None,
+        class_id: Optional[int],
+        class_name: str = "",
         fmt: BBoxFormat = BBoxFormat.YOLO,
         img_height: Optional[int] = None,
         img_width: Optional[int] = None
@@ -1267,7 +1267,7 @@ class BBoxClassId(BBox):
             "class_name": self.class_name
         })
         return data
-    
+    @classmethod
     def from_json(cls, data):
         return cls(
             coordinates = data["coordinates"],
@@ -1311,8 +1311,8 @@ class BBoxClassIdScore(BBoxClassId):
         class_name: Optional[str],
         score: float,
         fmt: BBoxFormat = BBoxFormat.YOLO,
-        img_height: int = None,
-        img_width: int = None
+        img_height: Optional[int] = None,
+        img_width: Optional[int] = None
     ):
         """
         Initializes a bounding box object with the given parameters.
@@ -1382,6 +1382,8 @@ class BBoxClassIdScore(BBoxClassId):
             "score": self.score
         })
         return data
+    
+    @classmethod
     def from_json(cls, data):
         return cls(
             coordinates = data["coordinates"],

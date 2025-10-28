@@ -302,25 +302,6 @@ class COCOS3Loader(BaseDataloader):
             # Handle single index
             return self._load_item(idx)
 
-    def get_image_shape(self, idx: int) -> Tuple[int, int]:
-        """Get the shape of the image at the specified index.
-
-        Args:
-            idx: Index of the image
-
-        Returns:
-            Tuple of (height, width) of the image
-
-        Raises:
-            IndexError: If index out of range
-        """
-        # Get only the first 1 KB
-        resp = self.s3_client._client.get_object(Bucket=self.s3_client._bucket_name, Key=str(self.image_annotation_pairs[idx][0]), Range="bytes=0-1023")
-        data = resp["Body"].read()
-        # Try opening the image
-        with PILImage.open(io.BytesIO(data)) as img:
-            return img.height, img.width
-
     def _load_item(self, idx: int) -> Tuple[Path, Optional[Image], List[BBoxClassId]]:
         """Load single item by index.
 
@@ -539,10 +520,10 @@ def is_coco_dataset(root_dir: Union[str, Path]) -> bool:
     return False
 
 
-def get_dataset_paths(root_dir: str) -> Tuple[
-    Optional[str], Optional[str],
-    Optional[str], Optional[str],
-    Optional[str], Optional[str]
+def get_dataset_paths(root_dir: Union[str, Path]) -> Tuple[
+    Optional[Union[str, Path]], Optional[Union[str, Path]],
+    Optional[Union[str, Path]], Optional[Union[str, Path]],
+    Optional[Union[str, Path]], Optional[Union[str, Path]]
 ]:
     """
     Retrieve paths to images directories and annotation files for train, val, and test splits

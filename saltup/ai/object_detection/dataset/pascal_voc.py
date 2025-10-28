@@ -52,8 +52,8 @@ from saltup.utils import configure_logging
 class PascalVOCLoader(BaseDataloader):
     def __init__(
         self,
-        images_dir: str,
-        annotations_dir: str,
+        images_dir: Union[str, Path],
+        annotations_dir: Union[str, Path],
         color_mode: ColorMode = ColorMode.RGB
     ):
         """
@@ -90,7 +90,7 @@ class PascalVOCLoader(BaseDataloader):
         self._current_index = 0  # Reset position when creating new iterator
         return self
 
-    def __next__(self) -> Tuple[str, Image, List[BBoxClassId]]:
+    def __next__(self) -> Tuple[Path, Optional[Image], List[BBoxClassId]]:
         """Get next item from dataset."""
         if self._current_index >= len(self.image_annotation_pairs):
             self._current_index = 0  # Reset for next iteration
@@ -105,8 +105,8 @@ class PascalVOCLoader(BaseDataloader):
         return len(self.image_annotation_pairs)
     
     def __getitem__(self, idx: Union[int, slice]) -> Union[
-        Tuple[str, Image, List[BBoxClassId]],
-        List[Tuple[str, Image, List[BBoxClassId]]]
+        Tuple[Path, Optional[Image], List[BBoxClassId]],
+        List[Tuple[Path, Optional[Image], List[BBoxClassId]]]
     ]:
         """Get item(s) by index.
         
@@ -126,8 +126,8 @@ class PascalVOCLoader(BaseDataloader):
         else:
             # Handle single index
             return self._load_item(idx)
-    
-    def _load_item(self, idx: int) -> Tuple[str, Image, List[BBoxClassId]]:
+
+    def _load_item(self, idx: int) -> Tuple[Path, Optional[Image], List[BBoxClassId]]:
         """Load single item by index.
         
         Args:
@@ -148,7 +148,7 @@ class PascalVOCLoader(BaseDataloader):
         image = self.load_image(image_path, self.color_mode)
         annotations = read_annotation(annotation_path)
 
-        return image_path, image, annotations
+        return Path(image_path), image, annotations
 
     def split(self, ratio):
         """Split dataset into subsets based on given ratio."""
@@ -240,7 +240,7 @@ class PascalVOCS3Loader(BaseDataloader):
         self._current_index = 0  # Reset position when creating new iterator
         return self
 
-    def __next__(self) -> Tuple[str, Image, List[BBoxClassId]]:
+    def __next__(self) -> Tuple[Path, Optional[Image], List[BBoxClassId]]:
         """Get next item from dataset."""
         if self._current_index >= len(self.image_annotation_pairs):
             self._current_index = 0  # Reset for next iteration
@@ -255,8 +255,8 @@ class PascalVOCS3Loader(BaseDataloader):
         return len(self.image_annotation_pairs)
     
     def __getitem__(self, idx: Union[int, slice]) -> Union[
-        Tuple[str, Image, List[BBoxClassId]],
-        List[Tuple[str, Image, List[BBoxClassId]]]
+        Tuple[Path, Optional[Image], List[BBoxClassId]],
+        List[Tuple[Path, Optional[Image], List[BBoxClassId]]]
     ]:
         """Get item(s) by index.
         
@@ -277,7 +277,7 @@ class PascalVOCS3Loader(BaseDataloader):
             # Handle single index
             return self._load_item(idx)
 
-    def _load_item(self, idx: int) -> Tuple[str, Image, List[BBoxClassId]]:
+    def _load_item(self, idx: int) -> Tuple[Path, Optional[Image], List[BBoxClassId]]:
         """Load single item by index.
         
         Args:
@@ -329,7 +329,7 @@ class PascalVOCS3Loader(BaseDataloader):
             temp_annotation_path = os.path.join(tmpdirname, os.path.basename(annotation_path))
             annotations = read_annotation(temp_annotation_path)
         image_path = os.path.join("s3://", self.s3_client._bucket_name, image_path)
-        return image_path, image, annotations
+        return Path(image_path), image, annotations
 
     def split(self, ratio):
         """Split dataset into subsets based on given ratio."""
@@ -441,10 +441,10 @@ def is_pascal_voc_dataset(root_dir: Union[str, Path]) -> bool:
     return False
 
 
-def get_dataset_paths(root_dir: str) -> Tuple[
-    Optional[str], Optional[str], 
-    Optional[str], Optional[str], 
-    Optional[str], Optional[str]
+def get_dataset_paths(root_dir: Union[str, Path]) -> Tuple[
+    Optional[Union[str, Path]], Optional[Union[str, Path]], 
+    Optional[Union[str, Path]], Optional[Union[str, Path]], 
+    Optional[Union[str, Path]], Optional[Union[str, Path]]
 ]:
     """Get directory paths for dataset in Pascal VOC format.
 
@@ -528,39 +528,44 @@ def validate_dataset_structure(root_dir: str) -> Dict[str, Dict[str, Union[int, 
 
 
 def read_annotation(annotation_file: str) -> List[BBoxClassId]:
-    """Parse Pascal VOC format annotations from an XML file.
-
-    Args:
-        annotation_file (str): Path to the Pascal VOC annotation file
-
-    Returns:
-        List of dictionaries containing object annotations:
-            - class_name: Name of the object class
-            - bbox: Tuple of (xmin, ymin, xmax, ymax)
-    """
+    """Parse Pascal VOC format annotations from an XML file."""
     tree = ET.parse(annotation_file)
     root = tree.getroot()
-    
-    width = int(root.find('size/width').text)
-    height = int(root.find('size/height').text)
+
+    # Helper function to safely get text content
+    def get_text(element, path: str) -> Optional[str]:
+        elem = element.find(path)
+        return elem.text if elem is not None else None
+
+    # Helper function to safely get int value
+    def get_int(element, path: str) -> Optional[int]:
+        text = get_text(element, path)
+        return int(text) if text is not None else None
+
+    width = get_int(root, 'size/width')
+    height = get_int(root, 'size/height')
 
     annotations = []
     for obj in root.findall('object'):
-        class_name = obj.find('name').text
+        class_name = get_text(obj, 'name')
         bbox = obj.find('bndbox')
-        xmin = int(bbox.find('xmin').text)
-        ymin = int(bbox.find('ymin').text)
-        xmax = int(bbox.find('xmax').text)
-        ymax = int(bbox.find('ymax').text)
-        annotations.append(BBoxClassId(
-            coordinates=(xmin, ymin, xmax, ymax),
-            class_name=class_name,
-            # Pascal VOC don't have class IDs
-            class_id=None,
-            img_height=height,
-            img_width=width,
-            fmt=BBoxFormat.CORNERS_ABSOLUTE
-        ))
+        
+        if bbox is not None:
+            xmin = get_int(bbox, 'xmin')
+            ymin = get_int(bbox, 'ymin')
+            xmax = get_int(bbox, 'xmax')
+            ymax = get_int(bbox, 'ymax')
+            
+            # Skip objects with incomplete bbox data
+            if all(coord is not None for coord in [xmin, ymin, xmax, ymax]):
+                annotations.append(BBoxClassId(
+                    coordinates=(xmin, ymin, xmax, ymax),
+                    class_name=class_name or "unknown",
+                    class_id=None,
+                    img_height=height,
+                    img_width=width,
+                    fmt=BBoxFormat.CORNERS_ABSOLUTE
+                ))
 
     return annotations
 

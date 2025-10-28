@@ -1,11 +1,12 @@
 from abc import ABC, abstractmethod
-from typing import List, Any
+from typing import List, Any, Union
+from pathlib import Path
 
 from saltup.utils.data.image.image_utils import Image
 
 class Dataset(ABC):
-    def __init__(self, root_dir: str):
-        self.root_dir = root_dir
+    def __init__(self, root_dir: Union[str, Path]):
+        self.root_dir = Path(root_dir)
 
     @abstractmethod
     def get_image(self, image_id: str) -> Image:
