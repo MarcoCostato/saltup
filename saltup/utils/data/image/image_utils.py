@@ -38,6 +38,21 @@ class ColorMode(IntEnum):
     BGR = auto()
     GRAY = auto()
 
+    def to_string(self):
+        """
+        Convert the ColorMode enum to its string representation.
+
+        Returns:
+            str: The string representation of the color mode.
+        """
+        if self == ColorMode.RGB:
+            return "RGB"
+        elif self == ColorMode.BGR:
+            return "BGR"
+        elif self == ColorMode.GRAY:
+            return "GRAY"
+        else:
+            return "UNKNOWN"
 
 class ImageFormat(IntEnum):
     HWC = auto()  # Height, Width, Channels (default)
