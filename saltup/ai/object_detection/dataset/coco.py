@@ -325,8 +325,8 @@ class COCOS3Loader(BaseDataloader):
             with tempfile.TemporaryDirectory() as tmpdirname:
                 try:
                     self.s3_client.download_file(
-                        file_path=str(image_path),
-                        destination_path=tmpdirname
+                        str(image_path),
+                        tmpdirname
                     )
                     self.downloaded_files += 1
                 except ClientError as e:

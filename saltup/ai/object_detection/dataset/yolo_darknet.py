@@ -287,8 +287,8 @@ class YoloDarknetS3Loader(BaseDataloader):
                 
                 try:
                     self.s3_client.download_file(
-                        file_path=image_path,
-                        destination_path=tmpdirname
+                        image_path,
+                        tmpdirname
                     )
                     self.downloaded_files += 1
                 except ClientError as e:
@@ -306,8 +306,8 @@ class YoloDarknetS3Loader(BaseDataloader):
         with tempfile.TemporaryDirectory() as tmpdirname:
             try:
                 self.s3_client.download_file(
-                    file_path=label_path,
-                    destination_path=tmpdirname
+                    label_path,
+                    tmpdirname
                 )
                 temp_label_path = os.path.join(tmpdirname, os.path.basename(label_path))
             except ClientError as e:

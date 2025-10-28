@@ -302,8 +302,8 @@ class PascalVOCS3Loader(BaseDataloader):
                 
                 try:
                     self.s3_client.download_file(
-                        file_path=image_path,
-                        destination_path=tmpdirname
+                        image_path,
+                        tmpdirname
                     )
                     self.logger.info(f"Downloaded {image_path} to {tmpdirname}")
                     self.downloaded_files += 1
@@ -318,8 +318,8 @@ class PascalVOCS3Loader(BaseDataloader):
             print('created temporary directory', tmpdirname)
             try:
                 self.s3_client.download_file(
-                    file_path=annotation_path,
-                    destination_path=tmpdirname
+                    annotation_path,
+                    tmpdirname
                 )
                 self.logger.info(f"Downloaded {annotation_path} to {tmpdirname}")
                 annotation_path = os.path.join(tmpdirname, os.path.basename(annotation_path))
