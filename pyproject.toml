@@ -16,11 +16,10 @@ authors = [
 keywords = ["AI", "deep learning", "computer vision", "YOLO"]
 license = { text = "MIT" }
 
-# DIPENDENZE COMPLETE (versione normale - backward compatibility)
-# Include tutte le funzionalità: dataset loaders, training, inferenza, conversione modelli
+# BASE DEPENDENCIES (LITE version - default)
+# Only data processing, dataset loaders, utilities (~200MB)
 dependencies = [
-    # === CORE DEPENDENCIES (anche in versione lite) ===
-    # Manipolazione dati e immagini
+    # Data and image manipulation
     "pillow",
     "opencv-python",
     "numpy",
@@ -35,11 +34,16 @@ dependencies = [
     "toml",
     "dotmap",
     
-    # Visualizzazione
+    # Visualization
     "matplotlib",
     "seaborn",
-    
-    # === ML FRAMEWORKS (solo versione completa) ===
+]
+
+# OPTIONAL DEPENDENCIES
+[project.optional-dependencies]
+
+# FULL version: Adds ML frameworks, training, inference (~4GB total)
+full = [
     # Deep Learning Frameworks
     "tensorflow==2.18.0",
     "keras",
@@ -70,33 +74,6 @@ dependencies = [
     "nbformat",
     "paho-mqtt",
     "pytest"
-]
-
-# DIPENDENZE OPZIONALI
-[project.optional-dependencies]
-
-# Versione LITE: Solo data processing, dataset loaders, utilities
-# Riduzione dimensioni: ~4GB → ~200MB (95% riduzione)
-# Use cases: ETL, data preprocessing, dataset analysis, S3 sync
-lite = [
-    # Manipolazione dati e immagini
-    "pillow",
-    "opencv-python",
-    "numpy",
-    "pandas",
-    "scipy",
-    "pyarrow",
-    "fastparquet",
-    
-    # Cloud & Utilities
-    "boto3",           # S3 access
-    "tqdm",            # Progress bars
-    "toml",
-    "dotmap",
-    
-    # Visualizzazione
-    "matplotlib",
-    "seaborn",
 ]
 
 [project.scripts]
