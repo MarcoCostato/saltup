@@ -25,16 +25,16 @@ saltup-env\Scripts\activate
 
 ## Installation Options
 
-### Full Installation (Default - ~4GB)
-All features including ML training, inference, and model conversion:
+### Lite Installation (Default - ~200MB)
+Data processing and dataset utilities without ML frameworks:
 ```bash
 pip install git+https://github.com/freedreamer82/saltup.git
 ```
 
-### Lite Installation (~200MB - 95% smaller)
-Data processing and dataset utilities without ML frameworks:
+### Full Installation (~4GB)
+All features including ML training, inference, and model conversion:
 ```bash
-pip install "saltup[lite] @ git+https://github.com/freedreamer82/saltup.git"
+pip install "saltup[full] @ git+https://github.com/freedreamer82/saltup.git"
 ```
 
 **Lite includes:** Dataset loaders (YOLO, COCO, Pascal VOC), S3 integration, image/video processing, bbox operations, dataset analysis.  
@@ -42,17 +42,19 @@ pip install "saltup[lite] @ git+https://github.com/freedreamer82/saltup.git"
 
 ## Development Installation
 
-For development with all features:
-```bash
-git clone https://github.com/freedreamer82/saltup.git
-cd saltup && ./makePackage.sh -d
-```
-
 For lightweight development (data processing only):
 ```bash
 git clone https://github.com/freedreamer82/saltup.git
 cd saltup
-pip install -e .[lite]
+pip install -e .
+```
+
+For development with all features:
+```bash
+git clone https://github.com/freedreamer82/saltup.git
+cd saltup
+pip install -e .[full]
+# or use: ./makePackage.sh -d
 ```
 
 ## The Magic
