@@ -148,6 +148,12 @@ class S3:
         file_name = os.path.basename(file_path)
         local_file_path = os.path.join(destination_path, file_name)
         downloaded_file = []
+        filename_list = []
+        
+        if file_name in filename_list and file_path not in downloaded_file:
+            file_name = f"copy_{file_name}"
+            local_file_path = os.path.join(destination_path, file_name)
+        
         # Check if the file already exists and overwrite is False
         if os.path.exists(local_file_path) and not overwrite and file_path in downloaded_file:
             logging.debug(f"File '{local_file_path}' already exists. Skipping download.")
@@ -162,6 +168,7 @@ class S3:
                 self._client.download_file(self._bucket_name, file_path, local_file_path)
                 logging.debug(f"File downloaded at {local_file_path}")
                 downloaded_file.append(file_path)
+                filename_list.append(file_name)
                 return True
             except Exception as e:
                 logging.error(f"Attempt {attempt + 1} failed to download file '{file_path}': {e}")
