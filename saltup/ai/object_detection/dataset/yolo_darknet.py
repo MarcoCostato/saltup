@@ -182,7 +182,7 @@ class YoloDarknetS3Loader(BaseDataloader):
         labels_dir: Union[str, Path],
         s3_client: S3,
         color_mode: ColorMode = ColorMode.RGB,
-        download_file: bool = True,
+        download_file: bool = False,
         max_files: int = -1,
     ):
         """

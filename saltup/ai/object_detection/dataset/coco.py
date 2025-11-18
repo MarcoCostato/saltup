@@ -343,24 +343,25 @@ class COCOS3Loader(BaseDataloader):
     def _load_annotations(self) -> Dict:
         """Load COCO annotations from JSON file."""
         try:
-            obj = self.s3_client._client.get_object(Bucket=self.s3_client._bucket_name, Key=str(self.annotations_file))
+            obj = self.s3_client._client.get_object(
+                Bucket=self.s3_client._bucket_name, 
+                Key=str(self.annotations_file)
+            )
             content = obj['Body'].read().decode("utf-8")
-            
-        except ClientError as e:
-            if e.response['Error']['Code'] == "NoSuchKey":
-                self.logger.warning(f"S3 annotation file not found: {self.annotations_file}")
-        try:
             annotations = json.loads(content)
+            
+            # Validate COCO format
             required_keys = ["images", "annotations", "categories"]
             if not all(key in annotations for key in required_keys):
-                raise ValueError(f"Invalid COCO format. Missing one or more required keys: {required_keys}")
+                raise ValueError(f"Invalid COCO format. Missing required keys: {required_keys}")
                 
             return annotations
-        except json.JSONDecodeError:
-            self.logger.error(f"Invalid JSON format in annotation file: {self.annotations_file}")
+            
+        except ClientError as e:
+            self.logger.error(f"Failed to load annotations from S3: {self.annotations_file} - {e}")
             raise
-        except Exception as e:
-            self.logger.error(f"Error loading annotations from {self.annotations_file}: {str(e)}")
+        except json.JSONDecodeError as e:
+            self.logger.error(f"Invalid JSON in annotation file: {self.annotations_file} - {e}")
             raise
 
     def split(self, ratio):

@@ -85,7 +85,7 @@ class MockDatasetLoader(BaseDataloader):
     def split(self, ratio):
         raise NotImplementedError
 
-    def merge(dl1, dg2):
+    def merge(dg1, dg2):
         raise NotImplementedError
 
 
