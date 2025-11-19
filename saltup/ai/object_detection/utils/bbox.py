@@ -166,13 +166,13 @@ class BBoxFormat(IntEnum):
             return cls.CORNERS_NORMALIZED
         elif s in ["center normalized", "center_normalized", "xywh normalized", "xywh_normalized"]:
             return cls.CENTER_NORMALIZED
-        elif s in ["topleft normalized", "topleft_normalized", "xywh normalized", "xywh_normalized"]:
+        elif s in ["topleft normalized", "topleft_normalized", "x1y1wh normalized", "x1y1wh_normalized"]:
             return cls.TOPLEFT_NORMALIZED
         elif s in ["corners absolute", "corners_absolute", "x1y1x2y2 absolute", "x1y1x2y2_absolute"]:
             return cls.CORNERS_ABSOLUTE
         elif s in ["center absolute", "center_absolute", "xywh absolute", "xywh_absolute"]:
             return cls.CENTER_ABSOLUTE
-        elif s in ["topleft absolute", "topleft_absolute", "xywh absolute", "xywh_absolute"]:
+        elif s in ["topleft absolute", "topleft_absolute", "x1y1wh absolute", "x1y1wh_absolute"]:
             return cls.TOPLEFT_ABSOLUTE
         elif s == "yolo":
             return cls.YOLO
