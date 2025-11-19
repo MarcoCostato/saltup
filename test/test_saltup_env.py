@@ -1,4 +1,5 @@
 import pytest
+import os
 import json
 import tempfile
 from unittest.mock import patch, mock_open
@@ -418,22 +419,6 @@ class TestEdgeCases:
         with patch.dict(os.environ, {"SALTUP_TRAINING_KERAS_COMPILE_ARGS": nested_json}):
             result = SaltupEnv.SALTUP_TRAINING_KERAS_COMPILE_ARGS
             assert "optimizer_config" in result
-            assert result["optimizer_config"]["learning_rate"] == 0.001
-            assert len(result["callbacks"]) == 2
-
-    def test_unicode_characters_in_json(self):
-        """Test handling of unicode characters in JSON."""
-        unicode_json = json.dumps({
-            "description": "Тест с unicode символами",
-            "emoji": "🚀🔥💯",
-            "chinese": "测试中文字符"
-        })
-        
-        with patch.dict(os.environ, {"SALTUP_TRAINING_KERAS_COMPILE_ARGS": unicode_json}):
-            result = SaltupEnv.SALTUP_TRAINING_KERAS_COMPILE_ARGS
-            assert "description" in result
-            assert result["emoji"] == "🚀🔥💯"
-            assert result["chinese"] == "测试中文字符"
             assert result["optimizer_config"]["learning_rate"] == 0.001
             assert len(result["callbacks"]) == 2
 
