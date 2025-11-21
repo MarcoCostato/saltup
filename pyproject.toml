@@ -11,7 +11,7 @@ requires-python = ">=3.6"
 authors = [
     { name = "Marco Garzola" },
     { name = "Francesco Sonnessa" },
-    { name = "Marc Randriatsimiovaloza" }
+    { name = "Marc Randriatsimiovalaza" }
 ]
 keywords = ["AI", "deep learning", "computer vision", "YOLO"]
 license = { text = "MIT" }
