@@ -2,10 +2,18 @@ from typing import Union, List, Iterable, Optional, Tuple
 import fnmatch
 import shutil
 import os
+from pathlib import Path
+from urllib.parse import urlparse
+import numpy as np
 from tqdm import tqdm
 from saltup.utils import configure_logging
 from contextlib import contextmanager
 import sys
+
+
+def is_url(path: Union[str, Path]) -> bool:
+    """Check if the given path is an HTTP/HTTPS URL (e.g. a presigned URL)."""
+    return isinstance(path, str) and urlparse(path).scheme in ('http', 'https')
 
 
 @contextmanager
@@ -503,3 +511,48 @@ def consolidate_files(
 
     logger.info(f"Operation completed: {processed_count} processed, {failed_count} failed")
     return processed_count, failed_count
+
+
+# =============================================================================
+# Statistical / Signal Utilities
+# =============================================================================
+
+def compute_weighted_average(window: np.ndarray) -> float:
+    """Compute a run-length-weighted average of a 1-D window.
+
+    The window is split around its median into "high" and "low" groups.
+    Each sample receives a weight equal to the length of its contiguous
+    run (high or low), so that sustained patterns contribute more.
+
+    Args:
+        window: 1-D NumPy array of values.
+
+    Returns:
+        The weighted average as a float.  Returns ``NaN`` for empty
+        arrays and the single value for length-1 arrays.
+
+    Examples:
+        >>> compute_weighted_average(np.array([1, 1, 1, 5, 5]))
+        2.6
+    """
+    if len(window) == 0:
+        return np.nan
+    if len(window) == 1:
+        return float(window[0])
+
+    median = np.median(window)
+    is_high = window > median
+
+    # Build per-element weights from contiguous run lengths
+    runs: List[int] = []
+    current_run = 1
+    for j in range(1, len(is_high)):
+        if is_high[j] == is_high[j - 1]:
+            current_run += 1
+        else:
+            runs.extend([current_run] * current_run)
+            current_run = 1
+    runs.extend([current_run] * current_run)  # last run
+
+    weights = np.array(runs, dtype=np.float64)
+    return float(np.sum(weights * window) / np.sum(weights))
