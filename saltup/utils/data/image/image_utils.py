@@ -225,6 +225,44 @@ class Image:
         # Update the color mode
         self.color_mode = new_color_mode
 
+    def to_jpeg(self, quality: int = 95, save_path: Optional[Union[str, Path]] = None) -> np.ndarray:
+        """
+        Encode the image to JPEG format and return as numpy array.
+        
+        Args:
+            quality: JPEG quality (0-100). Default is 95.
+            save_path: Optional path to save the JPEG file. If None, only returns the buffer.
+        
+        Returns:
+            np.ndarray: JPEG encoded image as a 1D numpy array (uint8).
+        """
+        # Convert to BGR if necessary (cv2.imencode requires BGR format)
+        image_to_encode = copy.deepcopy(self.__image)
+        
+        # Handle grayscale images (remove channel dimension if present)
+        if self.color_mode == ColorMode.GRAY and len(image_to_encode.shape) == 3:
+            image_to_encode = np.squeeze(image_to_encode, axis=-1)
+        elif self.color_mode == ColorMode.RGB:
+            # Convert RGB to BGR for cv2.imencode
+            image_to_encode = cv2.cvtColor(image_to_encode, cv2.COLOR_RGB2BGR)
+        # If already BGR, use as is
+        
+        # Encode to JPEG format
+        encode_params = [cv2.IMWRITE_JPEG_QUALITY, quality]
+        success, buffer = cv2.imencode('.jpg', image_to_encode, encode_params)
+        
+        if not success:
+            raise RuntimeError("Failed to encode image to JPEG format")
+        
+        # Save to file if path is provided
+        if save_path is not None:
+            save_path = Path(save_path) if isinstance(save_path, str) else save_path
+            with open(save_path, 'wb') as f:
+                f.write(buffer.tobytes())
+        
+        # Return the JPEG buffer as numpy array
+        return buffer.flatten()
+    
     def copy(self) -> 'Image':
         """
         Create a deep copy of the current Image instance.
