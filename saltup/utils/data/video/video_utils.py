@@ -306,19 +306,22 @@ def _infer_codec_from_filename(filename: Union[str, Path]) -> str:
 
 def process_video(
     video_input: Union[str, Path],
-    callback: Callable[[Image, int, int], Image] = None,  # Updated callback signature
+    callback: Callable[[Image, int, int], Image] = None,
     video_output: Union[str, Path] = None,
     fps: int = None,
+    frame_numbers: Optional[List[int]] = None
 ):
     """
     Process a video frame by frame, applying a callback to each frame.
-
+    
     Args:
         video_input: Path to the input video.
-        callback: Callback function that receives a frame (as a NumPy array), the frame number, and the total frame count.
+        callback: Callback function that receives a frame (as Image), frame number, and total frame count.
         video_output: Path to the output video (optional).
-        fps: FPS of the output video (if not specified, uses the same FPS as the input video).
-
+        fps: FPS of the output video (if not specified, uses input FPS).
+        frame_numbers: List of specific frame numbers to process (e.g., [0, 10, 20, 150]).
+                      If None, processes all frames sequentially.
+    
     Returns:
         None
     """
@@ -326,11 +329,11 @@ def process_video(
     input_video = cv2.VideoCapture(str(video_input))
     if not input_video.isOpened():
         raise FileNotFoundError(f"Unable to open video: {video_input}")
-
-    # Get video properties using the get_video_properties function
+    
+    # Get video properties
     input_fps, total_frames, width, height = get_video_properties(video_input)
-
-    # Define the codec and create a VideoWriter object if an output video is specified
+    
+    # Setup output video if specified
     if video_output:
         codec = _infer_codec_from_filename(video_output)
         fourcc = cv2.VideoWriter_fourcc(*codec)
@@ -338,26 +341,52 @@ def process_video(
         out = cv2.VideoWriter(str(video_output), fourcc, output_fps, (width, height))
     else:
         out = None
-
-    frame_number = 0
-    while input_video.isOpened():
-        ret, frame = input_video.read()
-        if not ret:
-            break
-
-        # Apply the callback to the frame
-        if callback:
-            processed_frame = callback(Image(frame), frame_number, total_frames)
-        else:
-            processed_frame = Image(frame)
+    
+    if frame_numbers is not None:
+        # 🚀 MODALITÀ SELETTIVA: salta ai frame specifici
+        frames_to_process = sorted(set(frame_numbers))
         
-        # If an output video is specified, write the processed frame
-        if out is not None:
-            out.write(processed_frame.get_data())
-
-        frame_number += 1
-
-    # Release everything when done
+        for frame_number in frames_to_process:
+            if frame_number >= total_frames:
+                continue
+                
+            # Salta al frame desiderato
+            input_video.set(cv2.CAP_PROP_POS_FRAMES, frame_number)
+            ret, frame = input_video.read()
+            
+            if not ret:
+                continue
+            
+            # Apply callback
+            if callback:
+                processed_frame = callback(Image(frame), frame_number, total_frames)
+            else:
+                processed_frame = Image(frame)
+            
+            # Write to output if specified
+            if out is not None:
+                out.write(processed_frame.get_data())
+    else:
+        # 📹 MODALITÀ SEQUENZIALE: processa tutti i frame (comportamento originale)
+        frame_number = 0
+        while input_video.isOpened():
+            ret, frame = input_video.read()
+            if not ret:
+                break
+            
+            # Apply callback
+            if callback:
+                processed_frame = callback(Image(frame), frame_number, total_frames)
+            else:
+                processed_frame = Image(frame)
+            
+            # Write to output if specified
+            if out is not None:
+                out.write(processed_frame.get_data())
+            
+            frame_number += 1
+    
+    # Cleanup
     input_video.release()
     if out is not None:
         out.release()
