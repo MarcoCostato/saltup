@@ -533,7 +533,7 @@ def compute_weighted_average(window: np.ndarray) -> float:
 
     Examples:
         >>> compute_weighted_average(np.array([1, 1, 1, 5, 5]))
-        2.6
+        2.23
     """
     if len(window) == 0:
         return np.nan
