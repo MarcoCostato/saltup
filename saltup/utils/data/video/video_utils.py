@@ -5,7 +5,7 @@ from pathlib import Path, PurePosixPath
 import subprocess
 from typing import Callable, Dict, Tuple, Union, List, Optional
 from urllib.parse import urlparse
-from saltup.utils.misc import is_url, compute_weighted_average
+from saltup.utils.misc import is_url
 from saltup.utils.data.image.image_utils import ColorMode, ColorsBGR, Image, ImageFormat
 
 # =============================================================================
@@ -260,28 +260,6 @@ def get_video_properties(video_path: Union[str, Path]) -> tuple[float, int, int,
 
     video.release()
     return fps, total_frames, width, height
- 
-# def get_video_properties(video_path: Union[str, Path]):
-#     """
-#     Get video properties such as FPS, total frames, width, and height.
-
-#     Args:
-#         video_path: Path to the video file.
-
-#     Returns:
-#         A tuple containing (fps, total_frames, width, height).
-#     """
-#     video = cv2.VideoCapture(str(video_path))
-#     if not video.isOpened():
-#         raise FileNotFoundError(f"Unable to open video: {video_path}")
-
-#     fps = video.get(cv2.CAP_PROP_FPS)
-#     total_frames = int(video.get(cv2.CAP_PROP_FRAME_COUNT))
-#     width = int(video.get(cv2.CAP_PROP_FRAME_WIDTH))
-#     height = int(video.get(cv2.CAP_PROP_FRAME_HEIGHT))
-
-#     video.release()
-#     return fps, total_frames, width, height
 
 def _infer_codec_from_filename(filename: Union[str, Path]) -> str:
     """
@@ -493,12 +471,11 @@ def _quadrant_names(n_quadrants: int) -> List[str]:
     """
     return [f"quadrant_{i + 1}" for i in range(n_quadrants)]
 
-
 # =============================================================================
-# Quadrant Energy Analysis
+# Quadrant Intensity Analysis
 # =============================================================================
 
-def extract_quadrant_energy_intensity(
+def extract_quadrant_intensity(
     frames: List[np.ndarray],
     n_quadrants: int = 4,
 ) -> Dict[int, Dict[str, float]]:
@@ -528,10 +505,10 @@ def extract_quadrant_energy_intensity(
     Examples:
         >>> import numpy as np
         >>> white = np.ones((100, 100), dtype=np.uint8) * 255
-        >>> result = extract_quadrant_energy([white])
+        >>> result = extract_quadrant_intensity([white])
         >>> result[0]['quadrant_1']
         255.0
-        >>> result_9 = extract_quadrant_energy([white], n_quadrants=9)
+        >>> result_9 = extract_quadrant_intensity([white], n_quadrants=9)
         >>> len(result_9[0])
         9
     """
@@ -568,15 +545,14 @@ def extract_quadrant_energy_intensity(
     return energies
 
 
-def extract_quadrant_energy_intensity_diff(
+def extract_quadrant_motion(
     frames: List[np.ndarray],
     n_quadrants: int = 4,
 ) -> Dict[int, Dict[str, float]]:
-    """Compute per-frame energy using absolute frame differences.
-
-    Instead of raw pixel intensity (see :func:`extract_quadrant_energy`),
+    """Compute per-frame intensity using absolute frame differences.
+    Instead of raw pixel intensity (see :func:`extract_quadrant_intensity`),
     this function measures *change* between consecutive frames.  The
-    first frame always yields zero energy (no previous frame to diff
+    first frame always yields zero intensity (no previous frame to diff
     against).  This approach reduces sensitivity to slow global
     illumination changes and highlights motion.
 
@@ -586,7 +562,7 @@ def extract_quadrant_energy_intensity_diff(
         n_quadrants: Number of spatial regions (2–16).  Defaults to 4.
 
     Returns:
-        Same structure as :func:`extract_quadrant_energy` but values
+        Same structure as :func:`extract_quadrant_intensity` but values
         represent the mean absolute difference per quadrant.
 
     Raises:
@@ -630,89 +606,115 @@ def extract_quadrant_energy_intensity_diff(
 
 
 # =============================================================================
-# Variance Segment Extraction & Artifact Removal
+# Windowed Segment Aggregation & Filtering
 # =============================================================================
 
-def extract_variance_segments(
-    quad_variances: Dict[str, np.ndarray],
+def compute_windowed_segment_stats(
+    signal: np.ndarray,
     segments: List[Tuple[float, float]],
     fps: float,
     window_size_seconds: float = 10.0,
+    agg_fn: Optional[Callable[[np.ndarray], float]] = None,
 ) -> List[np.ndarray]:
-    """Extract windowed average variance arrays for each activity segment.
+    """Downsample a per-frame signal within each time segment.
 
-    For every segment the per-quadrant variances are averaged frame by
-    frame, then downsampled by computing the weighted average over
-    non-overlapping windows of *window_size_seconds*.
+    For every ``(start, end)`` segment the function slices the
+    corresponding frames from *signal*, splits them into
+    non-overlapping windows of *window_size_seconds*, and reduces each
+    window to a single scalar via *agg_fn*.
+
+    This is a generic building block — it knows nothing about quadrants
+    or variance; it simply aggregates any 1-D per-frame signal over
+    time windows.
 
     Args:
-        quad_variances: Per-quadrant variance arrays (from
-            :func:`detect_activity_segments`).
-        segments: List of ``(start_seconds, end_seconds)`` tuples.
-        fps: Video frame rate.
-        window_size_seconds: Duration (seconds) of each averaging
-            window.  Defaults to 10.0.
+        signal: 1-D NumPy array of per-frame values (length = total
+            number of frames in the source video).
+        segments: List of ``(start_seconds, end_seconds)`` tuples
+            defining the time intervals to process.
+        fps: Video frame rate (frames per second).
+        window_size_seconds: Duration (seconds) of each non-overlapping
+            aggregation window.  Defaults to 10.0.
+        agg_fn: Callable that reduces a 1-D window array to a single
+            float.  Receives an ``np.ndarray`` and must return a float.
+            Defaults to ``np.mean`` when ``None``.
 
     Returns:
-        A list of 1-D NumPy arrays, one per segment, containing the
-        windowed average variance values.
+        A list of 1-D NumPy arrays (one per segment) containing the
+        aggregated values.
+
+    Examples:
+        >>> import numpy as np
+        >>> # 300 frames at 30 fps = 10 seconds of data
+        >>> signal = np.random.rand(300)
+        >>> segments = [(0.0, 10.0)]
+        >>> result = compute_windowed_segment_stats(signal, segments, fps=30, window_size_seconds=5.0)
+        >>> len(result)          # one segment
+        1
+        >>> result[0].shape[0]   # 10s / 5s = 2 windows
+        2
     """
-    # Discover quadrant names from the variance dict keys
-    quad_names = sorted(quad_variances.keys())
-    window_size_frames = int(window_size_seconds * fps)
-    variance_segments: List[np.ndarray] = []
+    if agg_fn is None:
+        agg_fn = lambda w: float(np.mean(w))
+
+    window_size_frames = max(1, int(window_size_seconds * fps))
+    results: List[np.ndarray] = []
 
     for start, end in segments:
-        frame_variances: List[float] = []
-        for frame_idx in range(int(start * fps), int(end * fps) + 1):
-            # Average the four quadrants at this frame
-            qvals = [quad_variances[qn][frame_idx] for qn in quad_names]
-            frame_variances.append(float(np.mean(qvals)))
+        start_frame = int(start * fps)
+        end_frame = min(int(end * fps) + 1, len(signal))
 
-        if not frame_variances:
+        segment_data = signal[start_frame:end_frame]
+        if len(segment_data) == 0:
             continue
 
-        # Downsample with windowed weighted average
-        segment_arr = np.asarray(frame_variances, dtype=np.float64)
-        averaged: List[float] = []
-        for win_start in range(0, len(segment_arr), window_size_frames):
-            window = segment_arr[win_start : win_start + window_size_frames]
+        aggregated: List[float] = []
+        for win_start in range(0, len(segment_data), window_size_frames):
+            window = segment_data[win_start : win_start + window_size_frames]
             if len(window) > 0:
-                averaged.append(compute_weighted_average(window))
+                aggregated.append(agg_fn(window))
 
-        variance_segments.append(np.array(averaged))
+        results.append(np.array(aggregated))
 
-    return variance_segments
+    return results
 
 
-def remove_artifact_segments(
+def filter_segments_by_std(
     segments: List[Tuple[float, float]],
-    variance_segments: List[np.ndarray],
-    std_threshold: float = 0.0001,
+    segment_signals: List[np.ndarray],
+    std_threshold: float = 0.01,
 ) -> Tuple[List[Tuple[float, float]], List[np.ndarray]]:
-    """Filter out segments whose variance profile is nearly constant.
+    """Discard segments whose associated signal has low variability.
 
-    Segments with a standard deviation below *std_threshold* across all
-    windowed variance values are considered artifacts (e.g. static noise
-    or sensor glitches) and are removed.
+    Pairs of ``(segment, signal)`` are dropped when the standard
+    deviation of *signal* falls below *std_threshold*.  This is useful
+    for removing near-constant regions that are unlikely to contain
+    meaningful activity.
 
     Args:
         segments: Time segments as ``(start, end)`` tuples.
-        variance_segments: Corresponding variance arrays from
-            :func:`extract_variance_segments`.
+        segment_signals: One 1-D NumPy array per segment (e.g. output
+            of :func:`compute_windowed_segment_stats`).
         std_threshold: Minimum standard deviation to keep a segment.
-            Defaults to 0.0001.
+            Defaults to 0.01.
 
     Returns:
-        A 2-tuple ``(filtered_segments, filtered_variances)`` with the
-        artifact-free data.
+        A 2-tuple ``(kept_segments, kept_signals)``.
+
+    Examples:
+        >>> import numpy as np
+        >>> segs = [(0, 10), (20, 30)]
+        >>> sigs = [np.array([0.5, 0.5, 0.5]), np.array([0.1, 0.9, 0.3])]
+        >>> kept_segs, kept_sigs = filter_segments_by_std(segs, sigs, std_threshold=0.1)
+        >>> len(kept_segs)  # first segment (constant) is dropped
+        1
     """
-    filtered_segments: List[Tuple[float, float]] = []
-    filtered_variances: List[np.ndarray] = []
+    kept_segments: List[Tuple[float, float]] = []
+    kept_signals: List[np.ndarray] = []
 
-    for i, var_seg in enumerate(variance_segments):
-        if np.std(var_seg) >= std_threshold:
-            filtered_segments.append(segments[i])
-            filtered_variances.append(var_seg)
+    for i, sig in enumerate(segment_signals):
+        if np.std(sig) >= std_threshold:
+            kept_segments.append(segments[i])
+            kept_signals.append(sig)
 
-    return filtered_segments, filtered_variances
+    return kept_segments, kept_signals

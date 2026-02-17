@@ -522,7 +522,7 @@ def compute_weighted_average(window: np.ndarray) -> float:
 
     The window is split around its median into "high" and "low" groups.
     Each sample receives a weight equal to the length of its contiguous
-    run (high or low), so that sustained patterns contribute more.
+    run (high or low), so that sustained trends contribute more than isolated spikes.
 
     Args:
         window: 1-D NumPy array of values.
