@@ -2,8 +2,10 @@ from typing import Union, List, Iterable, Optional, Tuple
 import fnmatch
 import shutil
 import os
-from pathlib import Path
-from urllib.parse import urlparse
+import mimetypes
+import re
+from pathlib import Path, PurePosixPath
+from urllib.parse import urlparse, parse_qs, unquote
 import numpy as np
 from tqdm import tqdm
 from saltup.utils import configure_logging
@@ -14,6 +16,64 @@ import sys
 def is_url(path: Union[str, Path]) -> bool:
     """Check if the given path is an HTTP/HTTPS URL (e.g. a presigned URL)."""
     return isinstance(path, str) and urlparse(path).scheme in ('http', 'https')
+
+
+def extract_extension_from_url(path: str) -> str:
+    """
+    Attempt to determine the file extension from a presigned URL.
+    Priority:
+      1. URL path extension
+      2. mimetypes.guess_type on the raw URL
+      3. response-content-disposition (RFC 5987 filename*= first, then filename=)
+      4. response-content-type query param  ← new fallback
+    Returns a lowercase suffix like '.mp4', or '' if nothing found.
+    """
+    parsed = urlparse(path)
+
+    # 1. Try the URL path directly
+    suffix = PurePosixPath(parsed.path).suffix.lower()
+    if suffix:
+        return suffix
+
+    # 2. mimetypes guess on the full URL (works when path has a clean extension before '?')
+    guessed_type, _ = mimetypes.guess_type(path)
+    if guessed_type:
+        ext = mimetypes.guess_extension(guessed_type)
+        if ext:
+            return ext.lower()
+
+    # 3. response-content-disposition (parse_qs already URL-decodes values — don't unquote again)
+    query_params = parse_qs(parsed.query)
+    disposition = query_params.get("response-content-disposition", [None])[0]
+    if disposition:
+        # RFC 5987: filename*=charset'language'percent-encoded-value  (case-insensitive charset)
+        match_ext = re.search(
+            r"filename\*=[\w-]+'[^']*'([^;]+)",
+            disposition,
+            re.IGNORECASE,
+        )
+        if match_ext:
+            candidate = unquote(match_ext.group(1).strip().strip('"'))
+            suffix = PurePosixPath(candidate).suffix.lower()
+            if suffix:
+                return suffix
+
+        # Standard: filename="value" or filename=value
+        match_std = re.search(r'filename=["\']?([^"\';\s]+)["\']?', disposition, re.IGNORECASE)
+        if match_std:
+            candidate = match_std.group(1).strip()
+            suffix = PurePosixPath(candidate).suffix.lower()
+            if suffix:
+                return suffix
+
+    # 4. response-content-type query param (S3-specific override)
+    content_type = query_params.get("response-content-type", [None])[0]
+    if content_type:
+        ext = mimetypes.guess_extension(content_type.split(";")[0].strip())
+        if ext:
+            return ext.lower()
+
+    return ""
 
 
 @contextmanager
