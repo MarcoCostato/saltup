@@ -1,6 +1,7 @@
 import os
 import cv2
 import numpy as np
+import re
 from pathlib import Path, PurePosixPath
 import subprocess
 from typing import Callable, Dict, Tuple, Union, List, Optional
@@ -719,3 +720,407 @@ def filter_segments_by_std(
             kept_signals.append(sig)
 
     return kept_segments, kept_signals
+
+# =============================================================================
+# Header Parsing Helpers
+# =============================================================================
+
+from saltup.utils.data.image.image_utils import FileExtensionType
+
+def get_header(path: Union[str, Path]) -> bytes:
+    """
+    Reads the first 256 KB of a file for header parsing.
+    This is sufficient for formats like WAV, FLAC, and MP3 which have headers within this range.
+    """
+    file_path = Path(path)
+    extension_name = file_path.suffix.lower().lstrip(".")
+
+    read_sizes = {
+        "micro": 64 * 1024,
+        "small": 2000 * 1024,
+        "medium": 5000 * 1024,
+    }
+
+    first_64kb_ext = {
+        FileExtensionType.WMV,
+        FileExtensionType.FLV,
+        
+    }
+
+    first_2mb_ext = {
+        FileExtensionType.AVI,
+        FileExtensionType.MKV,
+        FileExtensionType.WEBM,
+    }
+    first_5mb_ext = {
+        FileExtensionType.MP4,
+        FileExtensionType.MOV,
+        FileExtensionType.GP,
+        FileExtensionType.M3U8
+    }
+
+    try:
+        extension = FileExtensionType(extension_name)
+    except ValueError:
+        extension = None
+
+    if extension in first_64kb_ext:
+        with open(file_path, "rb") as file:
+            return file.read(read_sizes["micro"])
+
+    if extension in first_2mb_ext:
+        with open(file_path, "rb") as file:
+            return file.read(read_sizes["small"])
+
+    if extension in first_5mb_ext:
+        with open(file_path, "rb") as file:
+            return file.read(read_sizes["medium"])
+
+    with open(file_path, "rb") as file:
+        return file.read(4)
+
+
+def get_tail(path: Union[str, Path]) -> bytes:
+    """
+    Reads the last 256 KB of a file for footer parsing.
+    This is useful for formats that may have important metadata at the end of the file.
+    """
+    file_path = Path(path)
+    extension_name = file_path.suffix.lower().lstrip(".")
+
+    read_sizes = {
+        "medium": 5000 * 1024,
+    }
+    last_5mb_ext = {
+        FileExtensionType.MP4,
+        FileExtensionType.MOV,
+    }
+
+    try:
+        extension = FileExtensionType(extension_name)
+    except ValueError:
+        extension = None
+
+    if extension in last_5mb_ext:
+        with open(file_path, "rb") as file:
+            file_size = file.seek(0, os.SEEK_END)
+            file.seek(-min(read_sizes["medium"], file_size), os.SEEK_END)
+            return file.read()
+
+    with open(file_path, "rb") as file:
+        file_size = file.seek(0, os.SEEK_END)
+        file.seek(-min(4, file_size), os.SEEK_END)
+        return file.read(4)
+
+
+def parse_flv_header(header: bytes) -> dict:
+    """
+    Parses the header of an FLV file to extract metadata such as format, resolution, and duration.
+    This is a simplified parser that looks for specific byte patterns in the header.
+    """
+    metadata = {
+        "format": "FLV",
+        "width": None,
+        "height": None,
+        "fps": None,
+        "bit_depth": None,
+    }
+
+    # FLV starts with ASCII 'FLV' then version byte
+    if len(header) >= 9 and header[0:3] == b'FLV':
+        metadata["format"] = "FLV"
+        metadata["version"] = header[3]
+        # flags: 5th byte
+        metadata["flags"] = header[4]
+        # data offset is 4 bytes at 5..8 (big endian)
+        try:
+            metadata["data_offset"] = int.from_bytes(header[5:9], "big")
+        except Exception:
+            metadata["data_offset"] = None
+        return metadata
+
+    return {"format": "FLV", "error": "Invalid FLV signature"}
+
+def parse_avi_header(header: bytes) -> dict:
+    """
+    Parses the header of an AVI file to extract metadata such as format, resolution, and duration.
+    This is a simplified parser that looks for specific byte patterns in the header.
+    """
+    metadata = {
+        "format": "AVI",
+        "width": None,
+        "height": None,
+        "fps": None,
+        "bit_depth": None,
+    }
+
+    # AVI is a RIFF container with 'AVI ' as form type
+    if len(header) >= 12 and header[0:4] == b'RIFF' and header[8:12] == b'AVI ':
+        metadata["format"] = "AVI"
+        # try to find 'avih' chunk and extract dwWidth/dwHeight
+        idx = header.find(b'avih')
+        if idx != -1 and idx + 8 + 40 <= len(header):
+            # avih: 4 bytes size after 'avih', then data; width at offset 32 within data
+            data_start = idx + 8
+            try:
+                # dwMicroSecPerFrame (uSec per frame) at offset 0
+                dwMicroSecPerFrame = int.from_bytes(header[data_start + 0:data_start + 4], 'little')
+                if dwMicroSecPerFrame > 0:
+                    metadata["fps"] = 1_000_000.0 / float(dwMicroSecPerFrame)
+
+                # dwTotalFrames at offset 16 (total frames in file)
+                try:
+                    total_frames = int.from_bytes(header[data_start + 16:data_start + 20], 'little')
+                    metadata["total_frames"] = total_frames
+                except Exception:
+                    pass
+
+                width = int.from_bytes(header[data_start + 32:data_start + 36], 'little')
+                height = int.from_bytes(header[data_start + 36:data_start + 40], 'little')
+                metadata["width"] = width
+                metadata["height"] = height
+            except Exception:
+                pass
+        return metadata
+
+    return {"format": "AVI", "error": "Invalid AVI/RIFF header"}
+
+def parse_mkv_header(header: bytes) -> dict:
+    """
+    Parses the header of an MKV file to extract metadata such as format, resolution, and duration.
+    This is a simplified parser that looks for specific byte patterns in the header.
+    """
+    metadata = {
+        "format": "MKV",
+        "width": None,
+        "height": None,
+        "fps": None,
+        "bit_depth": None,
+    }
+
+    # MKV/WebM use EBML; EBML header starts with 0x1A45DFA3
+    if len(header) >= 4 and header[0:4] == b'\x1A\x45\xDF\xA3':
+        metadata["format"] = "MKV/WEBM"
+        # try to detect doc type (webm) in the first kilobyte
+        if b'webm' in header[:4096].lower():
+            metadata["format"] = "WEBM"
+        return metadata
+
+    return {"format": "MKV", "error": "Invalid EBML/MKV header"}
+
+
+def parse_mp4_header(header: bytes) -> dict:
+    """
+    Parses the header of an MP4 file to extract metadata such as format, resolution, and duration.
+    This is a simplified parser that looks for specific byte patterns in the header.
+    """
+    metadata = {
+        "format": "MP4",
+        "width": None,
+        "height": None,
+        "fps": None,
+        "bit_depth": None,
+        "duration": None,
+    }
+
+    # MP4 files start with 'ftyp' box within the first few bytes
+    if b'ftyp' not in header:
+        return {"format": "MP4", "error": "Invalid MP4 signature"}
+
+    metadata["format"] = "MP4"
+
+    # Try to find 'moov' box which contains metadata; it may not be in the header if it's at the end of the file
+    if b'moov' in header:
+        # This is still a naive approach; proper MP4 parsing requires box sizes and nesting
+        moov_idx = header.find(b'moov')
+        if moov_idx != -1:
+            # Look for 'mvhd' box inside 'moov' which contains duration and timescale
+            mvhd_idx = header.find(b'mvhd', moov_idx)
+            if mvhd_idx != -1 and mvhd_idx + 8 <= len(header):
+                try:
+                    # mvhd version is at mvhd_idx + 4 (mvhd type + fullbox version)
+                    version = header[mvhd_idx + 4]
+                    if version == 0 and mvhd_idx + 24 <= len(header):
+                        # For mvhd v0: timescale @ +16, duration @ +20 (from type offset)
+                        timescale = int.from_bytes(header[mvhd_idx + 16:mvhd_idx + 20], 'big')
+                        duration = int.from_bytes(header[mvhd_idx + 20:mvhd_idx + 24], 'big')
+                    elif version == 1 and mvhd_idx + 40 <= len(header):
+                        # For mvhd v1: timescale @ +28, duration @ +32 (64-bit)
+                        timescale = int.from_bytes(header[mvhd_idx + 28:mvhd_idx + 32], 'big')
+                        duration = int.from_bytes(header[mvhd_idx + 32:mvhd_idx + 40], 'big')
+                    else:
+                        timescale = None
+                        duration = None
+
+                    if timescale and duration is not None:
+                        metadata["duration"] = float(duration) / float(timescale)
+                except Exception:
+                    pass
+
+            # Look for 'trak' boxes which contain track info; we want the video track
+            trak_idx = header.find(b'trak', moov_idx)
+            while trak_idx != -1:
+                next_trak_idx = header.find(b'trak', trak_idx + 4)
+                trak_end = next_trak_idx if next_trak_idx != -1 else len(header)
+
+                # Look for 'tkhd' box inside 'trak' which contains width/height
+                tkhd_idx = header.find(b'tkhd', trak_idx)
+                if tkhd_idx != -1 and tkhd_idx + 8 <= len(header):
+                    try:
+                        version = header[tkhd_idx + 4]
+                        if version == 0 and tkhd_idx + 88 <= len(header):
+                            # tkhd_idx points to box type ('tkhd'), so width/height are at +80/+84
+                            width = int.from_bytes(header[tkhd_idx + 80:tkhd_idx + 84], 'big') >> 16
+                            height = int.from_bytes(header[tkhd_idx + 84:tkhd_idx + 88], 'big') >> 16
+                        elif version == 1 and tkhd_idx + 100 <= len(header):
+                            # version 1 has larger timestamps; width/height shift by +12 bytes
+                            width = int.from_bytes(header[tkhd_idx + 92:tkhd_idx + 96], 'big') >> 16
+                            height = int.from_bytes(header[tkhd_idx + 96:tkhd_idx + 100], 'big') >> 16
+                        else:
+                            width = None
+                            height = None
+
+                        if width and height:
+                            metadata["width"] = width
+                            metadata["height"] = height
+                    except Exception:
+                        pass
+
+                # Try to compute FPS from track timing (mdhd) and sample count (stsz)
+                if metadata.get("fps") is None:
+                    mdhd_idx = header.find(b'mdhd', trak_idx, trak_end)
+                    stsz_idx = header.find(b'stsz', trak_idx, trak_end)
+                    if mdhd_idx != -1 and stsz_idx != -1:
+                        try:
+                            track_timescale = None
+                            track_duration = None
+
+                            # mdhd version is at mdhd_idx + 4
+                            mdhd_version = header[mdhd_idx + 4] if mdhd_idx + 5 <= len(header) else None
+                            if mdhd_version == 0 and mdhd_idx + 24 <= len(header):
+                                # mdhd v0: timescale @ +16, duration @ +20 (from type offset)
+                                track_timescale = int.from_bytes(header[mdhd_idx + 16:mdhd_idx + 20], 'big')
+                                track_duration = int.from_bytes(header[mdhd_idx + 20:mdhd_idx + 24], 'big')
+                            elif mdhd_version == 1 and mdhd_idx + 40 <= len(header):
+                                # mdhd v1: timescale @ +28, duration @ +32 (64-bit)
+                                track_timescale = int.from_bytes(header[mdhd_idx + 28:mdhd_idx + 32], 'big')
+                                track_duration = int.from_bytes(header[mdhd_idx + 32:mdhd_idx + 40], 'big')
+
+                            # stsz: sample_count @ +12 (from type offset)
+                            sample_count = None
+                            if stsz_idx + 16 <= len(header):
+                                sample_count = int.from_bytes(header[stsz_idx + 12:stsz_idx + 16], 'big')
+
+                            if (
+                                track_timescale is not None
+                                and track_duration is not None
+                                and track_timescale > 0
+                                and track_duration > 0
+                                and sample_count is not None
+                                and sample_count > 0
+                            ):
+                                duration_seconds = float(track_duration) / float(track_timescale)
+                                if duration_seconds > 0:
+                                    metadata["fps"] = int(round((float(sample_count) / duration_seconds), 0))
+                        except Exception:
+                            pass
+
+                # Look for next 'trak' box
+                trak_idx = header.find(b'trak', trak_idx + 4)
+
+    return metadata
+
+def parse_mov_header(header: bytes) -> dict:
+    """
+    Parses the header of a MOV file to extract metadata such as format, resolution, and duration.
+    This is a simplified parser that looks for specific byte patterns in the header.
+    """
+    # MOV files are structurally similar to MP4 (both are based on the ISO Base Media File Format)
+    # We can reuse the MP4 parsing logic with minor adjustments if needed
+    metadata = parse_mp4_header(header)
+    if "error" in metadata:
+        return {"format": "MOV", "error": "Invalid MOV/MP4 signature"}
+    
+    metadata["format"] = "MOV"
+    return metadata
+
+def parse_video_header(path:Union[str, Path]) -> dict:
+    """
+    Parses the video header to extract metadata such as format, resolution, and duration.
+    This function dispatches to specific parsers based on the detected format.
+    """
+    p = Path(path)
+    extension_name = p.suffix.lower().lstrip(".")
+
+    try:
+        extension = FileExtensionType(extension_name)
+    except ValueError:
+        return {"error": f"Unsupported extension: {extension_name or 'none'}"}
+    try:
+        data = get_header(p)
+    except Exception as exc:
+        return {"error": f"Cannot read file: {exc}"}
+
+    if extension in {FileExtensionType.TS, FileExtensionType.MTS, FileExtensionType.M2TS}:
+        if extension == FileExtensionType.TS:
+            result = parse_ts_header(data)
+        elif extension == FileExtensionType.MTS:
+            result = parse_mts_header(data)
+        else:
+            result = parse_m2ts_header(data)
+
+        # Header/tail-only enrichment for TS variants: some streams expose
+        # SPS/timing metadata only later in the file.
+        if (
+            "error" not in result
+            and (
+                result.get("width") is None
+                or result.get("height") is None
+                or result.get("fps") in (None, 0)
+            )
+        ):
+            try:
+                tail = get_tail(p)
+            except Exception:
+                tail = b""
+
+            if tail:
+                if extension == FileExtensionType.TS:
+                    tail_result = parse_ts_header(tail)
+                elif extension == FileExtensionType.MTS:
+                    tail_result = parse_mts_header(tail)
+                else:
+                    tail_result = parse_m2ts_header(tail)
+
+                if "error" not in tail_result:
+                    if result.get("width") is None and tail_result.get("width") is not None:
+                        result["width"] = tail_result.get("width")
+                    if result.get("height") is None and tail_result.get("height") is not None:
+                        result["height"] = tail_result.get("height")
+                    if result.get("fps") in (None, 0) and tail_result.get("fps") not in (None, 0):
+                        result["fps"] = tail_result.get("fps")
+                    if result.get("duration") is None and tail_result.get("duration") is not None:
+                        result["duration"] = tail_result.get("duration")
+        return result
+    if extension == FileExtensionType.AVI:
+        return parse_avi_header(data)
+    if extension == FileExtensionType.MP4:
+        if b"moov" in data:
+            return parse_mp4_header(data)
+        try:
+            tail = get_tail(p)
+        except Exception:
+            tail = b""
+        return parse_mp4_header(data + tail)
+    if extension == FileExtensionType.MOV:
+        if b"moov" in data:
+            return parse_mov_header(data)
+        try:
+            tail = get_tail(p)
+        except Exception:
+            tail = b""
+        return parse_mov_header(data + tail)
+    if extension == FileExtensionType.M3U8:
+        return parse_m3u8_header(data)
+
+    return {"error": "Unsupported or unknown video format"}

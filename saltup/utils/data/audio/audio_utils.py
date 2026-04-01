@@ -214,3 +214,359 @@ def _normalise_pcm(audio_data: np.ndarray, raw_format: str) -> np.ndarray:
     # float32 or other formats: return as-is
     return audio_data.astype(np.float32)
 
+
+# =============================================================================
+# Header parsing
+# =============================================================================
+ 
+from pathlib import Path
+from typing import Union
+from saltup.utils.data.image.image_utils import FileExtensionType
+
+_WAV_AUDIO_FORMATS = {
+    1: "PCM",
+    3: "IEEE_FLOAT",
+    6: "A_LAW",
+    7: "MU_LAW",
+    65534: "EXTENSIBLE",
+}
+
+
+def _get_wav_audio_format_name(audio_format_code: int | None) -> str | None:
+    """Return a readable WAV audio format label for a numeric code."""
+    if audio_format_code is None:
+        return None
+    return _WAV_AUDIO_FORMATS.get(audio_format_code, f"UNKNOWN_{audio_format_code}")
+
+def get_header(path: Union[str, Path]) -> bytes:
+    """Read a safe slice of bytes from an audio file based on its type.
+
+    For WAV/FLAC/MP3 files, reads the first 256 KB to cover typical header
+    sizes.  For raw files, reads the first 4 KB (enough for basic sanity
+    checks but not much more).
+
+    Args:
+        path: Path to the audio file.
+    Returns:
+        A bytes object containing the header slice.
+    """
+    p = Path(path)
+
+    read_audio_size = 64 * 1024
+    m4a_audio_size = 5000 * 1024
+    try:
+        extension = FileExtensionType(p.suffix.lower().lstrip("."))
+        if extension in {FileExtensionType.WAV, FileExtensionType.FLAC, FileExtensionType.MP3, FileExtensionType.AAC, FileExtensionType.OGG, FileExtensionType.WMA}:
+            with open(p, "rb") as file:
+                return file.read(read_audio_size)
+        elif extension == FileExtensionType.M4A:
+            with open(p, "rb") as file:
+                return file.read(m4a_audio_size)
+        else:
+            with open(p, "rb") as file:
+                return file.read(4096)
+    except ValueError:
+        with open(p, "rb") as file:
+            return file.read(4096)
+    except Exception as exc:
+        raise IOError(f"Cannot read file {path}: {exc}") from exc
+    
+    
+def parse_wav_header(data: bytes) -> dict:
+    """Parse a RIFF/WAVE header from bytes and return basic fields.
+
+    Returns: dict with keys: format, sample_rate, channels, bit_depth, audio_format,
+    audio_format_name
+    """
+    if len(data) < 12 or data[:4] != b"RIFF" or data[8:12] != b"WAVE":
+        return {"format": "WAV", "error": "Invalid WAV/RIFF header"}
+
+    offset = 12
+    sample_rate = None
+    channels = None
+    bit_depth = None
+    audio_format = None
+
+    while offset + 8 <= len(data):
+        chunk_id = data[offset:offset+4]
+        chunk_size = int.from_bytes(data[offset+4:offset+8], "little")
+        offset += 8
+        if offset + chunk_size > len(data):
+            break
+
+        if chunk_id == b"fmt ":
+            # fmt chunk minimum 16 bytes
+            fmt = data[offset:offset+chunk_size]
+            if len(fmt) >= 16:
+                audio_format = int.from_bytes(fmt[0:2], "little")
+                channels = int.from_bytes(fmt[2:4], "little")
+                sample_rate = int.from_bytes(fmt[4:8], "little")
+                bit_depth = int.from_bytes(fmt[14:16], "little")
+                return {
+                    "format": "WAV",
+                    "sample_rate": sample_rate,
+                    "channels": channels,
+                    "bit_depth": bit_depth,
+                    "audio_format": audio_format,
+                    "audio_format_name": _get_wav_audio_format_name(audio_format),
+                    "total_samples": None,  # not in fmt chunk
+                }
+
+        offset += ((chunk_size + 1) // 2) * 2  # chunks are word-aligned
+
+    return {"format": "WAV", "error": "fmt chunk not found"}
+
+
+def parse_flac_header(data: bytes) -> dict:
+    """Parse a FLAC header (fLaC + STREAMINFO) and extract sample rate/channels/bitdepth.
+    """
+    if len(data) < 8 or data[:4] != b"fLaC":
+        return {"format": "FLAC", "error": "Invalid FLAC signature"}
+
+    offset = 4
+    # iterate metadata blocks until STREAMINFO (type 0) found
+    while offset + 4 <= len(data):
+        header = data[offset]
+        is_last = (header >> 7) & 1
+        block_type = header & 0x7F
+        block_length = int.from_bytes(data[offset+1:offset+4], "big")
+        offset += 4
+        if offset + block_length > len(data):
+            break
+
+        if block_type == 0:  # STREAMINFO
+            block = data[offset:offset+block_length]
+            if len(block) < 34:
+                return {"format": "FLAC", "error": "STREAMINFO too short"}
+            # bytes 10..17 contain sample rate (20), channels (3), bits-per-sample (5), total_samples (36)
+            bits64 = int.from_bytes(block[10:18], "big")
+            sample_rate = bits64 >> (64 - 20)
+            channels = (bits64 >> (64 - 20 - 3)) & 0x7
+            bits_per_sample = (bits64 >> (64 - 20 - 3 - 5)) & 0x1F
+            total_samples = bits64 & ((1 << 36) - 1)
+            return {
+                "format": "FLAC",
+                "sample_rate": int(sample_rate),
+                "channels": int(channels) + 1 if channels is not None else None,
+                "bit_depth": int(bits_per_sample),
+                "audio_format": "PCM",  # PCM
+                "total_samples": int(total_samples),
+            }
+
+        offset += block_length
+        if is_last:
+            break
+
+    return {"format": "FLAC", "error": "STREAMINFO not found"}
+
+
+def parse_mp3_header(data: bytes) -> dict:
+    """Attempt to find an MPEG frame header and extract sample rate and channels.
+
+    This is a best-effort parser: it looks for a syncword (0xFFF) and decodes
+    fields from the first valid frame header it finds.
+    """
+    # skip ID3 tag if present
+    pos = 0
+    if data[:3] == b"ID3" and len(data) >= 10:
+        # synchsafe size in bytes 6..9
+        size_bytes = data[6:10]
+        size = ((size_bytes[0] & 0x7F) << 21) | ((size_bytes[1] & 0x7F) << 14) | ((size_bytes[2] & 0x7F) << 7) | (size_bytes[3] & 0x7F)
+        pos = 10 + size
+
+    def _parse_frame_at(i: int):
+        if i + 4 > len(data):
+            return None
+        header = int.from_bytes(data[i:i+4], "big")
+        if (header >> 21) & 0x7FF != 0x7FF:
+            return None
+        version_id = (header >> 19) & 0x3
+        sample_rate_idx = (header >> 10) & 0x3
+        channel_mode = (header >> 6) & 0x3
+
+        versions = {0: "2.5", 1: "reserved", 2: "2", 3: "1"}
+        sr_map = {
+            "1": [44100, 48000, 32000],
+            "2": [22050, 24000, 16000],
+            "2.5": [11025, 12000, 8000],
+        }
+        version = versions.get(version_id, None)
+        sample_rate = None
+        if version in sr_map and sample_rate_idx in (0,1,2):
+            sample_rate = sr_map[version][sample_rate_idx]
+        channels = 1 if channel_mode == 3 else 2
+        return {"format": "MP3", 
+                "sample_rate": sample_rate, 
+                "channels": channels, 
+                "audio_format": "PCM", #PCM
+                "bit_depth": None,
+                "total_samples": None}
+
+    # search for a valid frame header
+    while pos < len(data) - 4:
+        if data[pos] == 0xFF and (data[pos+1] & 0xE0) == 0xE0:
+            parsed = _parse_frame_at(pos)
+            if parsed:
+                return parsed
+        pos += 1
+
+    return {"format": "MP3", "error": "No frame header found"}
+
+def parse_aac_header(data: bytes) -> dict:
+    """Parse an ADTS AAC header and extract sample rate and channels.
+
+    This is a best-effort parser: it looks for a syncword (0xFFF) and decodes
+    fields from the first valid frame header it finds.
+    """
+    pos = 0
+    while pos < len(data) - 7:
+        if data[pos] == 0xFF and (data[pos+1] & 0xF0) == 0xF0:
+            # ADTS header is 7 or 9 bytes, but we only need the first 7 for parsing
+            header = int.from_bytes(data[pos:pos+7], "big")
+            profile = ((header >> 14) & 0x3) + 1
+            sample_rate_idx = (header >> 10) & 0xF
+            channel_config = (header >> 6) & 0x7
+
+            sr_map = [96000, 88200, 64000, 48000, 44100, 32000, 24000, 22050, 16000, 12000, 11025, 8000, 7350]
+            sample_rate = sr_map[sample_rate_idx] if sample_rate_idx < len(sr_map) else None
+            channels = channel_config if channel_config != 0 else None
+
+            return {
+                "format": "AAC",
+                "sample_rate": sample_rate,
+                "channels": channels,
+                "audio_format": profile,
+                "bit_depth": None,
+                "total_samples": None,
+            }
+        pos += 1
+
+    return {"format": "AAC", "error": "No ADTS header found"}
+
+def parse_ogg_header(data: bytes) -> dict:
+    """Parse an Ogg Vorbis header and extract sample rate and channels.
+
+    This is a best-effort parser: it looks for the "OggS" signature and decodes
+    fields from the first valid Vorbis identification header it finds.
+    """
+    pos = 0
+    while pos < len(data) - 27:
+        if data[pos:pos+4] == b"OggS":
+            # Ogg page header is 27 bytes + segment table, but we only need the first 27 for parsing
+            page_segments = data[pos+26]
+            if pos + 27 + page_segments > len(data):
+                break
+            segment_table = data[pos+27:pos+27+page_segments]
+            payload_size = sum(segment_table)
+            if pos + 27 + page_segments + payload_size > len(data):
+                break
+            payload = data[pos+27+page_segments:pos+27+page_segments+payload_size]
+            if payload.startswith(b"\x01vorbis"):
+                # Vorbis identification header
+                sample_rate = int.from_bytes(payload[12:16], "little")
+                channels = payload[11]
+                return {
+                    "format": "OGG",
+                    "sample_rate": sample_rate,
+                    "channels": channels,
+                    "audio_format": 1, # PCM
+                    "bit_depth": None,
+                    "total_samples": None,
+                }
+        pos += 1
+
+    return {"format": "OGG", "error": "No Vorbis header found"}
+
+def parse_m4a_header(data: bytes) -> dict:
+    """Parse an M4A/MP4 header and extract sample rate and channels.
+
+    This is a best-effort parser: it looks for the "ftyp" box and decodes
+    fields from the first valid "ispe" box it finds.
+    """
+    pos = 0
+    while pos < len(data) - 8:
+        box_size = int.from_bytes(data[pos:pos+4], "big")
+        box_type = data[pos+4:pos+8]
+        if box_type == b"ftyp":
+            # Check if it's an M4A/MP4 file based on major brand
+            major_brand = data[pos+8:pos+12]
+            if major_brand in (b"isom", b"mp42", b"mif1", b"heic", b"heix"):
+                # Look for "ispe" box which contains sample rate and channel count
+                ispe_pos = data.find(b"ispe", pos + box_size)
+                if ispe_pos != -1 and ispe_pos + 16 <= len(data):
+                    sample_rate = int.from_bytes(data[ispe_pos+8:ispe_pos+12], "big")
+                    channels = int.from_bytes(data[ispe_pos+12:ispe_pos+16], "big")
+                    return {
+                        "format": "M4A",
+                        "sample_rate": sample_rate,
+                        "channels": channels,
+                        "audio_format": 1, # PCM
+                        "bit_depth": None,
+                        "total_samples": None,
+                    }
+        pos += box_size if box_size > 0 else 8
+
+    return {"format": "M4A", "error": "No valid ftyp/ispe boxes found"}
+
+def parse_wma_header(data: bytes) -> dict:
+    """Parse a WMA header and extract sample rate and channels.
+
+    This is a best-effort parser: it looks for the ASF header and decodes
+    fields from the first valid Stream Properties Object it finds.
+    """
+    # ASF header starts with 16-byte GUID: 30 26 B2 75 8E 66 CF 11 A6 D9 00 AA 00 62 CE 6C
+    asf_guid = b"\x30\x26\xB2\x75\x8E\x66\xCF\x11\xA6\xD9\x00\xAA\x00\x62\xCE\x6C"
+    pos = data.find(asf_guid)
+    if pos == -1:
+        return {"format": "WMA", "error": "No ASF header found"}
+
+    # Look for Stream Properties Object (GUID: B7 DC BF 78 5E A8 11 CF A8 4F 00 AA 00 62 CE 6C)
+    stream_guid = b"\xB7\xDC\xBF\x78\x5E\xA8\x11\xCF\xA8\x4F\x00\xAA\x00\x62\xCE\x6C"
+    stream_pos = data.find(stream_guid, pos)
+    if stream_pos == -1 or stream_pos + 24 > len(data):
+        return {"format": "WMA", "error": "No Stream Properties Object found"}
+
+    # Stream Properties Object has a fixed structure; audio stream info starts at byte offset 24
+    audio_format = int.from_bytes(data[stream_pos+24:stream_pos+26], "little")
+    channels = int.from_bytes(data[stream_pos+26:stream_pos+28], "little")
+    sample_rate = int.from_bytes(data[stream_pos+28:stream_pos+32], "little")
+    bit_depth = int.from_bytes(data[stream_pos+32:stream_pos+34], "little")
+
+    return {
+        "format": "WMA",
+        "sample_rate": sample_rate,
+        "channels": channels,
+        "audio_format": audio_format,
+        "bit_depth": bit_depth,
+        "total_samples": None,
+    }
+
+
+def parse_audio_header(path: Union[str, Path]) -> dict:
+    """Read a small header slice from *path* and dispatch to the appropriate parser.
+
+    Supports WAV, MP3, FLAC detection by signature and returns the parser result.
+    """
+    p = Path(path)
+    extension_name = p.suffix.lower().lstrip(".")
+
+    try:
+        extension = FileExtensionType(extension_name)
+    except ValueError:
+        return {"error": f"Unsupported extension: {extension_name or 'none'}"}
+    try:
+        data = get_header(p)
+    except Exception as exc:
+        return {"error": f"Cannot read file: {exc}"}
+
+    if extension == FileExtensionType.WAV:
+        return parse_wav_header(data)
+    if extension == FileExtensionType.FLAC:
+        return parse_flac_header(data)
+    if extension == FileExtensionType.MP3:
+        return parse_mp3_header(data)
+
+    return {"error": "Unsupported or unknown audio format"}
+
+
+

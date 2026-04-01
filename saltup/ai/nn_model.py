@@ -151,7 +151,7 @@ class NeuralNetworkModel:
                     # If no output_shape attribute, infer from a forward pass (requires example input)
                     if hasattr(self.model, 'input_shape') and self.model.input_shape is not None:
                         try:
-                            example_input = torch.randn(1, *self.model.input_shape)  # Example input
+                            example_input = torch.randn(1, *self.model.input_shape).to(next(self.model.parameters()).device)  # Example input
                             with torch.no_grad():
                                 output = self.model(example_input)
                             self.output_shape = output.shape[1:]  # Exclude batch size

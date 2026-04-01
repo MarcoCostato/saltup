@@ -1,14 +1,12 @@
-import numpy as np
-import cv2
+import copy
+import random
+import struct
 from enum import IntEnum, auto, Enum
 from pathlib import Path
-from typing import Union
-import random
-from typing import Union, Optional
-from pathlib import Path
-import numpy as np
-import copy
+from typing import Optional, Union
+
 import cv2
+import numpy as np
 
 
 class ColorsBGR(Enum):
@@ -58,6 +56,526 @@ class ImageFormat(IntEnum):
     HWC = auto()  # Height, Width, Channels (default)
     CHW = auto()  # Channels, Height, Width
 
+class FileExtensionType(Enum):
+    JPEG = "jpeg"
+    JPG = "jpg"
+    PNG = "png"
+    BMP = "bmp"
+    SVG = "svg"
+    WEBP = "webp"
+    HEIC = "heic"
+    HEIF = "heif"
+    TIF = "tif"
+    TIFF = "tiff"
+    GIF = "gif"
+    MOV = "mov"
+    WEBM = "webm"
+    FLV = "flv"
+    WMV = "wmv"
+    GP = "3gp"
+    TS = "ts"
+    M2TS = "m2ts"
+    MTS = "mts"
+    M3U8 = "m3u8"
+    MP4 = "mp4"
+    AVI = "avi"
+    MKV = "mkv"
+    WAV = "wav"
+    FLAC = "flac"
+    MP3 = "mp3"
+    AAC = "aac"
+    OGG = "ogg"
+    M4A = "m4a"
+    WMA = "wma"
+
+
+# ---------------- Header parsing helpers ----------------
+# Read and parse image headers (JPEG / PNG / WEBP / GIF / TIFF / HEIC)
+def get_header(path: Union[str, Path]) -> bytes:
+    """Read a safe slice of bytes from an image file based on its type.
+
+    Safe read sizes:
+    - JPEG, PNG, WebP: first 64 KB
+    - HEIC, TIFF: first 256 KB
+    """
+    file_path = Path(path)
+    extension_name = file_path.suffix.lower().lstrip(".")
+
+    read_sizes = {
+        "nano": 54,  # enough for BMP header
+        "micro": 4 * 1024,
+        "small": 64 * 1024,
+        "medium": 256 * 1024,
+    }
+
+    first_54b_ext = {FileExtensionType.BMP}
+    first_4kb_ext = {FileExtensionType.SVG}
+
+    first_64kb_ext = {
+        FileExtensionType.JPG,
+        FileExtensionType.JPEG,
+        FileExtensionType.PNG,
+        FileExtensionType.WEBP,
+        FileExtensionType.GIF,
+    }
+    first_256kb_ext = {
+        FileExtensionType.HEIC,
+        FileExtensionType.HEIF,
+        FileExtensionType.TIF,
+        FileExtensionType.TIFF,
+    }
+
+    try:
+        extension = FileExtensionType(extension_name)
+    except ValueError:
+        extension = None
+
+    if extension in first_54b_ext:
+        with open(file_path, "rb") as file:
+            return file.read(read_sizes["nano"])
+    if extension in first_4kb_ext:
+        with open(file_path, "rb") as file:
+            return file.read(read_sizes["micro"])
+        
+    if extension in first_64kb_ext:
+        with open(file_path, "rb") as file:
+            return file.read(read_sizes["small"])
+
+    if extension in first_256kb_ext:
+        with open(file_path, "rb") as file:
+            return file.read(read_sizes["medium"])
+
+    with open(file_path, "rb") as file:
+        return file.read(4)
+
+def parse_jpeg_header(data: bytes) -> dict:
+    if len(data) < 4 or data[:2] != b"\xFF\xD8":
+        return {"format": "JPEG", "error": "Invalid JPEG signature"}
+
+    sof_markers = {0xC0, 0xC1, 0xC2, 0xC3, 0xC5, 0xC6, 0xC7, 0xC9, 0xCA, 0xCB, 0xCD, 0xCE, 0xCF}
+    i = 2
+    while i + 1 < len(data):
+        if data[i] != 0xFF:
+            i += 1
+            continue
+
+        while i < len(data) and data[i] == 0xFF:
+            i += 1
+        if i >= len(data):
+            break
+
+        marker = data[i]
+        i += 1
+
+        if marker == 0xD9:
+            break
+        if marker == 0xDA:
+            break
+        if 0xD0 <= marker <= 0xD7 or marker == 0x01:
+            continue
+
+        if i + 1 >= len(data):
+            break
+
+        segment_length = struct.unpack(">H", data[i:i + 2])[0]
+        if segment_length < 2:
+            break
+        if i + segment_length > len(data):
+            break
+
+        if marker in sof_markers:
+            if segment_length < 8:
+                return {"format": "JPEG", "error": "Invalid SOF segment"}
+            precision = data[i + 2]
+            height = struct.unpack(">H", data[i + 3:i + 5])[0]
+            width = struct.unpack(">H", data[i + 5:i + 7])[0]
+            channels = data[i + 7]
+            return {
+                "format": "JPEG",
+                "width": width,
+                "height": height,
+                "channels": channels,
+                "bit_depth": precision,
+                "color_mode": {1: "Grayscale", 3: "YCbCr/RGB", 4: "CMYK"}.get(channels, "Unknown"),
+            }
+
+        i += segment_length
+
+    return {"format": "JPEG", "error": "SOF marker not found"}
+
+
+def parse_png_header(data: bytes) -> dict:
+    if len(data) < 33 or data[:8] != b"\x89PNG\r\n\x1a\n":
+        return {"format": "PNG", "error": "Invalid PNG signature"}
+
+    if data[12:16] != b"IHDR":
+        return {"format": "PNG", "error": "IHDR chunk not found"}
+
+    width = struct.unpack(">I", data[16:20])[0]
+    height = struct.unpack(">I", data[20:24])[0]
+    bit_depth = data[24]
+    color_type = data[25]
+
+    channels_map = {0: 1, 2: 3, 3: 1, 4: 2, 6: 4}
+    color_mode_map = {
+        0: "Grayscale",
+        2: "RGB",
+        3: "Indexed",
+        4: "Grayscale+Alpha",
+        6: "RGBA",
+    }
+
+    return {
+        "format": "PNG",
+        "width": width,
+        "height": height,
+        "channels": channels_map.get(color_type, "Unknown"),
+        "bit_depth": bit_depth,
+        "color_mode": color_mode_map.get(color_type, "Unknown"),
+    }
+
+
+def parse_webp_header(data: bytes) -> dict:
+    if len(data) < 21 or data[:4] != b"RIFF" or data[8:12] != b"WEBP":
+        return {"format": "WEBP", "error": "Invalid WEBP signature"}
+
+    chunk_type = data[12:16]
+    payload = data[20:]
+
+    if chunk_type == b"VP8 ":
+        if len(payload) < 10 or payload[3:6] != b"\x9d\x01\x2a":
+            return {"format": "WEBP", "error": "Invalid VP8 chunk"}
+        width_raw = struct.unpack("<H", payload[6:8])[0]
+        height_raw = struct.unpack("<H", payload[8:10])[0]
+        width = width_raw & 0x3FFF
+        height = height_raw & 0x3FFF
+        return {
+            "format": "WEBP",
+            "width": width,
+            "height": height,
+            "channels": 3,
+            "bit_depth": 8,
+            "color_mode": "RGB",
+        }
+
+    if chunk_type == b"VP8L":
+        if len(payload) < 5 or payload[0] != 0x2F:
+            return {"format": "WEBP", "error": "Invalid VP8L chunk"}
+        bits = int.from_bytes(payload[1:5], "little")
+        width = (bits & 0x3FFF) + 1
+        height = ((bits >> 14) & 0x3FFF) + 1
+        return {
+            "format": "WEBP",
+            "width": width,
+            "height": height,
+            "channels": 4,
+            "bit_depth": 8,
+            "color_mode": "RGBA",
+        }
+
+    if chunk_type == b"VP8X":
+        if len(payload) < 10:
+            return {"format": "WEBP", "error": "Invalid VP8X chunk"}
+        width = int.from_bytes(payload[4:7], "little") + 1
+        height = int.from_bytes(payload[7:10], "little") + 1
+        return {
+            "format": "WEBP",
+            "width": width,
+            "height": height,
+            "channels": 4,
+            "bit_depth": 8,
+            "color_mode": "RGB/RGBA",
+        }
+
+    return {"format": "WEBP", "error": "Unsupported WEBP chunk type"}
+
+
+def parse_gif_header(data: bytes) -> dict:
+    # Accept GIF signatures in a case-insensitive way and be a bit more lenient
+    if len(data) < 10:
+        return {"format": "GIF", "error": "Invalid GIF signature"}
+
+    sig = data[:6].lower()
+    if sig not in (b"gif87a", b"gif89a"):
+        return {"format": "GIF", "error": "Invalid GIF signature"}
+
+    width = struct.unpack("<H", data[6:8])[0]
+    height = struct.unpack("<H", data[8:10])[0]
+    packed = data[10] if len(data) > 10 else 0
+    has_global_color_table = (packed & 0x80) != 0
+    channels = 3 if has_global_color_table else 1
+
+    return {
+        "format": "GIF",
+        "width": width,
+        "height": height,
+        "channels": channels,
+        "bit_depth": 8,
+        "color_mode": "Indexed",
+    }
+
+
+def parse_tiff_header(data: bytes) -> dict:
+    if len(data) < 8:
+        return {"format": "TIFF", "error": "Invalid TIFF header"}
+
+    if data[:2] == b"II":
+        endian = "<"
+    elif data[:2] == b"MM":
+        endian = ">"
+    else:
+        return {"format": "TIFF", "error": "Invalid TIFF byte order"}
+
+    magic = struct.unpack(f"{endian}H", data[2:4])[0]
+    if magic != 42:
+        return {"format": "TIFF", "error": "Invalid TIFF magic number"}
+
+    ifd_offset = struct.unpack(f"{endian}I", data[4:8])[0]
+    if ifd_offset + 2 > len(data):
+        return {"format": "TIFF", "error": "IFD offset out of range"}
+
+    num_entries = struct.unpack(f"{endian}H", data[ifd_offset:ifd_offset + 2])[0]
+    entry_start = ifd_offset + 2
+
+    width = None
+    height = None
+    bit_depth = None
+    channels = None
+
+    type_sizes = {1: 1, 2: 1, 3: 2, 4: 4, 5: 8}
+
+    def _read_ifd_value(value_type: int, value_count: int, value_or_offset: bytes):
+        unit_size = type_sizes.get(value_type)
+        if unit_size is None:
+            return None
+        total_size = unit_size * value_count
+
+        if total_size <= 4:
+            raw = value_or_offset[:total_size]
+        else:
+            offset = struct.unpack(f"{endian}I", value_or_offset)[0]
+            if offset + total_size > len(data):
+                return None
+            raw = data[offset:offset + total_size]
+
+        if value_type == 3:
+            values = [struct.unpack(f"{endian}H", raw[i:i + 2])[0] for i in range(0, len(raw), 2)]
+        elif value_type == 4:
+            values = [struct.unpack(f"{endian}I", raw[i:i + 4])[0] for i in range(0, len(raw), 4)]
+        elif value_type == 1:
+            values = list(raw)
+        else:
+            return None
+        return values
+
+    for entry_idx in range(num_entries):
+        pos = entry_start + entry_idx * 12
+        if pos + 12 > len(data):
+            break
+
+        tag = struct.unpack(f"{endian}H", data[pos:pos + 2])[0]
+        value_type = struct.unpack(f"{endian}H", data[pos + 2:pos + 4])[0]
+        value_count = struct.unpack(f"{endian}I", data[pos + 4:pos + 8])[0]
+        value_or_offset = data[pos + 8:pos + 12]
+        values = _read_ifd_value(value_type, value_count, value_or_offset)
+
+        if not values:
+            continue
+
+        if tag == 256:
+            width = values[0]
+        elif tag == 257:
+            height = values[0]
+        elif tag == 258:
+            bit_depth = values[0]
+        elif tag == 277:
+            channels = values[0]
+
+    if width is None or height is None:
+        return {"format": "TIFF", "error": "Width/Height tags not found"}
+
+    if bit_depth is None:
+        bit_depth = 8
+    if channels is None:
+        channels = 1
+
+    color_mode = {
+        1: "Grayscale",
+        3: "RGB",
+        4: "CMYK",
+    }.get(channels, "Unknown")
+
+    return {
+        "format": "TIFF",
+        "width": width,
+        "height": height,
+        "channels": channels,
+        "bit_depth": bit_depth,
+        "color_mode": color_mode,
+    }
+
+
+def parse_heic_header(data: bytes) -> dict:
+    if len(data) < 16:
+        return {"format": "HEIC", "error": "Invalid HEIC header"}
+
+    if data[4:8] != b"ftyp":
+        return {"format": "HEIC", "error": "ftyp box not found"}
+
+    major_brand = data[8:12]
+    valid_brands = {b"heic", b"heix", b"hevc", b"hevx", b"mif1", b"msf1"}
+    if major_brand not in valid_brands:
+        return {"format": "HEIC", "error": "Unsupported HEIC brand"}
+
+    ispe_idx = data.find(b"ispe")
+    if ispe_idx == -1 or ispe_idx + 16 > len(data):
+        return {"format": "HEIC", "error": "ispe box not found"}
+
+    width = struct.unpack(">I", data[ispe_idx + 8:ispe_idx + 12])[0]
+    height = struct.unpack(">I", data[ispe_idx + 12:ispe_idx + 16])[0]
+
+    return {
+        "format": "HEIC",
+        "width": width,
+        "height": height,
+        "channels": "Unknown",
+        "bit_depth": "Unknown",
+        "color_mode": "Unknown",
+    }
+
+def parse_bmp_header(data: bytes) -> dict:
+    if len(data) < 54 or data[:2] != b"BM":
+        return {"format": "BMP", "error": "Invalid BMP signature"}
+
+    file_size = struct.unpack("<I", data[2:6])[0]
+    width = struct.unpack("<I", data[18:22])[0]
+    height = struct.unpack("<I", data[22:26])[0]
+    planes = struct.unpack("<H", data[26:28])[0]
+    bit_count = struct.unpack("<H", data[28:30])[0]
+
+    if planes != 1:
+        return {"format": "BMP", "error": "Unsupported number of planes"}
+
+    color_mode = {
+        1: "Monochrome",
+        4: "16 colors",
+        8: "256 colors",
+        24: "RGB",
+        32: "RGBA",
+    }.get(bit_count, "Unknown")
+
+    channels = 3 if bit_count in (24, 32) else 1
+
+    return {
+        "format": "BMP",
+        "width": width,
+        "height": height,
+        "channels": channels,
+        "bit_depth": bit_count,
+        "color_mode": color_mode,
+    }
+
+def parse_svg_header(data: bytes) -> dict:
+    if b"<svg" not in data.lower():
+        return {"format": "SVG", "error": "SVG tag not found"}
+
+    import re
+
+    text = data.decode("utf-8", errors="ignore")
+    m = re.search(r"<svg\b([^>]*)>", text, flags=re.IGNORECASE | re.DOTALL)
+    attrs = m.group(1) if m else text
+
+    def _parse_value(val: str):
+        v = val.strip()
+        m2 = re.match(r"^([0-9.+-eE]+)([a-z%]*)$", v)
+        if not m2:
+            return None
+        num = float(m2.group(1))
+        unit = m2.group(2).lower()
+        if unit in ("", "px"):
+            return int(round(num))
+        if unit == "%":
+            return None
+        # convert common absolute units to px (assume 96dpi)
+        if unit == "in":
+            return int(round(num * 96))
+        if unit == "cm":
+            return int(round(num * 96.0 / 2.54))
+        if unit == "mm":
+            return int(round(num * 96.0 / 25.4))
+        if unit == "pt":
+            return int(round(num * 96.0 / 72.0))
+        if unit == "pc":
+            return int(round(num * 16.0))
+        return None
+
+    width = None
+    height = None
+
+    w_m = re.search(r"width\s*=\s*['\"]?([^'\">\s]+)", attrs, flags=re.IGNORECASE)
+    h_m = re.search(r"height\s*=\s*['\"]?([^'\">\s]+)", attrs, flags=re.IGNORECASE)
+    vb_m = re.search(r"viewBox\s*=\s*['\"]?([\d\.\-+eE\s,]+)['\"]?", attrs, flags=re.IGNORECASE)
+
+    if w_m:
+        width = _parse_value(w_m.group(1))
+    if h_m:
+        height = _parse_value(h_m.group(1))
+
+    if (width is None or height is None) and vb_m:
+        nums = re.split(r"[\s,]+", vb_m.group(1).strip())
+        if len(nums) >= 4:
+            try:
+                vb_w = float(nums[2])
+                vb_h = float(nums[3])
+                if width is None:
+                    width = int(round(vb_w))
+                if height is None:
+                    height = int(round(vb_h))
+            except Exception:
+                pass
+
+    result = {
+        "format": "SVG",
+        "width": width if width is not None else "Unknown",
+        "height": height if height is not None else "Unknown",
+        "channels": "Unknown",
+        "bit_depth": "Unknown",
+        "color_mode": "Unknown",
+    }
+
+    return result
+
+def parse_image_header(path: Union[str, Path]) -> dict:
+    file_path = Path(path)
+    extension_name = file_path.suffix.lower().lstrip(".")
+
+    try:
+        extension = FileExtensionType(extension_name)
+    except ValueError:
+        return {"error": f"Unsupported extension: {extension_name or 'none'}"}
+
+    data = get_header(file_path)
+
+    if extension in {FileExtensionType.JPG, FileExtensionType.JPEG}:
+        return parse_jpeg_header(data)
+    if extension == FileExtensionType.PNG:
+        return parse_png_header(data)
+    if extension == FileExtensionType.WEBP:
+        return parse_webp_header(data)
+    if extension == FileExtensionType.GIF:
+        return parse_gif_header(data)
+    if extension in {FileExtensionType.TIF, FileExtensionType.TIFF}:
+        return parse_tiff_header(data)
+    if extension in {FileExtensionType.HEIC, FileExtensionType.HEIF}:
+        return parse_heic_header(data)
+    if extension == FileExtensionType.SVG:
+        return parse_svg_header(data)
+    if extension == FileExtensionType.BMP:
+        return parse_bmp_header(data)
+
+    return {"error": f"No parser available for extension: {extension.value}"}
+    
+# ---------------- End header parsing helpers ----------------
 
 def generate_random_bgr_colors(num_colors):
     """

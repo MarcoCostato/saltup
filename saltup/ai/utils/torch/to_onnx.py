@@ -18,7 +18,7 @@ def convert_torch_to_onnx(model, input_shape, output_path, model_name="model"):
     try:
         # Set model to evaluation mode
         model.eval()
-        
+        model = model.cpu()
         # Create dummy input tensor
         dummy_input = torch.randn(input_shape)
         
@@ -28,7 +28,7 @@ def convert_torch_to_onnx(model, input_shape, output_path, model_name="model"):
             dummy_input,                    # Model input (or tuple for multiple inputs)
             output_path,                    # Output file path
             export_params=True,             # Store trained parameter weights
-            opset_version=11,               # ONNX version to export to
+            opset_version=18,               # ONNX version to export to
             do_constant_folding=True,       # Execute constant folding optimization
             input_names=['input'],          # Model input names
             output_names=['output'],        # Model output names
