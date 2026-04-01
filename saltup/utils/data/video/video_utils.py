@@ -2,6 +2,7 @@ import os
 import cv2
 import numpy as np
 import re
+import struct
 from pathlib import Path, PurePosixPath
 import subprocess
 from typing import Callable, Dict, Tuple, Union, List, Optional
@@ -812,35 +813,6 @@ def get_tail(path: Union[str, Path]) -> bytes:
         file.seek(-min(4, file_size), os.SEEK_END)
         return file.read(4)
 
-
-def parse_flv_header(header: bytes) -> dict:
-    """
-    Parses the header of an FLV file to extract metadata such as format, resolution, and duration.
-    This is a simplified parser that looks for specific byte patterns in the header.
-    """
-    metadata = {
-        "format": "FLV",
-        "width": None,
-        "height": None,
-        "fps": None,
-        "bit_depth": None,
-    }
-
-    # FLV starts with ASCII 'FLV' then version byte
-    if len(header) >= 9 and header[0:3] == b'FLV':
-        metadata["format"] = "FLV"
-        metadata["version"] = header[3]
-        # flags: 5th byte
-        metadata["flags"] = header[4]
-        # data offset is 4 bytes at 5..8 (big endian)
-        try:
-            metadata["data_offset"] = int.from_bytes(header[5:9], "big")
-        except Exception:
-            metadata["data_offset"] = None
-        return metadata
-
-    return {"format": "FLV", "error": "Invalid FLV signature"}
-
 def parse_avi_header(header: bytes) -> dict:
     """
     Parses the header of an AVI file to extract metadata such as format, resolution, and duration.
@@ -884,29 +856,6 @@ def parse_avi_header(header: bytes) -> dict:
         return metadata
 
     return {"format": "AVI", "error": "Invalid AVI/RIFF header"}
-
-def parse_mkv_header(header: bytes) -> dict:
-    """
-    Parses the header of an MKV file to extract metadata such as format, resolution, and duration.
-    This is a simplified parser that looks for specific byte patterns in the header.
-    """
-    metadata = {
-        "format": "MKV",
-        "width": None,
-        "height": None,
-        "fps": None,
-        "bit_depth": None,
-    }
-
-    # MKV/WebM use EBML; EBML header starts with 0x1A45DFA3
-    if len(header) >= 4 and header[0:4] == b'\x1A\x45\xDF\xA3':
-        metadata["format"] = "MKV/WEBM"
-        # try to detect doc type (webm) in the first kilobyte
-        if b'webm' in header[:4096].lower():
-            metadata["format"] = "WEBM"
-        return metadata
-
-    return {"format": "MKV", "error": "Invalid EBML/MKV header"}
 
 
 def parse_mp4_header(header: bytes) -> dict:
@@ -1060,48 +1009,6 @@ def parse_video_header(path:Union[str, Path]) -> dict:
         data = get_header(p)
     except Exception as exc:
         return {"error": f"Cannot read file: {exc}"}
-
-    if extension in {FileExtensionType.TS, FileExtensionType.MTS, FileExtensionType.M2TS}:
-        if extension == FileExtensionType.TS:
-            result = parse_ts_header(data)
-        elif extension == FileExtensionType.MTS:
-            result = parse_mts_header(data)
-        else:
-            result = parse_m2ts_header(data)
-
-        # Header/tail-only enrichment for TS variants: some streams expose
-        # SPS/timing metadata only later in the file.
-        if (
-            "error" not in result
-            and (
-                result.get("width") is None
-                or result.get("height") is None
-                or result.get("fps") in (None, 0)
-            )
-        ):
-            try:
-                tail = get_tail(p)
-            except Exception:
-                tail = b""
-
-            if tail:
-                if extension == FileExtensionType.TS:
-                    tail_result = parse_ts_header(tail)
-                elif extension == FileExtensionType.MTS:
-                    tail_result = parse_mts_header(tail)
-                else:
-                    tail_result = parse_m2ts_header(tail)
-
-                if "error" not in tail_result:
-                    if result.get("width") is None and tail_result.get("width") is not None:
-                        result["width"] = tail_result.get("width")
-                    if result.get("height") is None and tail_result.get("height") is not None:
-                        result["height"] = tail_result.get("height")
-                    if result.get("fps") in (None, 0) and tail_result.get("fps") not in (None, 0):
-                        result["fps"] = tail_result.get("fps")
-                    if result.get("duration") is None and tail_result.get("duration") is not None:
-                        result["duration"] = tail_result.get("duration")
-        return result
     if extension == FileExtensionType.AVI:
         return parse_avi_header(data)
     if extension == FileExtensionType.MP4:
@@ -1120,7 +1027,5 @@ def parse_video_header(path:Union[str, Path]) -> dict:
         except Exception:
             tail = b""
         return parse_mov_header(data + tail)
-    if extension == FileExtensionType.M3U8:
-        return parse_m3u8_header(data)
 
     return {"error": "Unsupported or unknown video format"}

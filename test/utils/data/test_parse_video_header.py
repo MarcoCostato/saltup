@@ -1,22 +1,10 @@
 import saltup.utils.data.video.video_utils as video_utils
 from saltup.utils.data.video.video_utils import (
     parse_avi_header,
-    parse_flv_header,
-    parse_mkv_header,
     parse_mov_header,
     parse_mp4_header,
     parse_video_header,
 )
-
-
-def test_parse_flv_header_valid_signature():
-    header = b"FLV" + bytes([0x01, 0x05]) + (9).to_bytes(4, "big") + b"\x00\x00\x00\x00"
-    result = parse_flv_header(header)
-
-    assert result["format"] == "FLV"
-    assert result["version"] == 1
-    assert result["flags"] == 5
-    assert result["data_offset"] == 9
 
 
 def test_parse_avi_header_reads_basic_stream_metadata():
@@ -34,15 +22,6 @@ def test_parse_avi_header_reads_basic_stream_metadata():
     assert result["height"] == 720
     assert result["total_frames"] == 250
     assert result["fps"] == 25.0
-
-
-def test_parse_mkv_header_detects_webm_doctype():
-    header = b"\x1A\x45\xDF\xA3" + b"\x00" * 64 + b"webm"
-    result = parse_mkv_header(header)
-
-    assert result["format"] == "WEBM"
-    assert result["width"] is None
-    assert result["height"] is None
 
 
 def test_parse_mp4_header_extracts_duration_and_dimensions():
