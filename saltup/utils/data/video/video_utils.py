@@ -5,6 +5,7 @@ import re
 import struct
 from pathlib import Path, PurePosixPath
 import subprocess
+from dataclasses import dataclass
 from typing import Callable, Dict, Tuple, Union, List, Optional
 from urllib.parse import urlparse
 from saltup.utils.misc import is_url, extract_extension_from_url
@@ -185,7 +186,22 @@ def extract_jpg_frames_from_video(
  
  
 
-def get_video_properties(video_path: Union[str, Path]) -> tuple[float, int, int, int]:
+@dataclass
+class VideoProperties:
+    fps: int
+    total_frames: int
+    width: int
+    height: int
+
+    def __iter__(self):
+        """Support tuple unpacking: fps, total_frames, width, height = props."""
+        yield self.fps
+        yield self.total_frames
+        yield self.width
+        yield self.height
+
+
+def get_video_properties(video_path: Union[str, Path], max_seconds: float = 0) -> VideoProperties:
 
     """
     Get video properties such as FPS, total frames, width, and height.
@@ -196,11 +212,19 @@ def get_video_properties(video_path: Union[str, Path]) -> tuple[float, int, int,
 
     Args:
         video_path: Local file path or HTTP/HTTPS URL (e.g. S3 presigned URL).
+        max_seconds: Maximum number of seconds to analyse when frame-level scanning
+            is required (e.g. ``.ts`` format).  A value ``<= 0`` means scan the
+            entire video (default behaviour).  Positive values stop scanning after
+            *max_seconds* seconds, which avoids downloading the full stream.
+            For formats that rely on container metadata (non-``.ts``), this parameter
+            has no effect unless ``CAP_PROP_FRAME_COUNT`` is unavailable (streams),
+            in which case frames are counted up to *max_seconds*.
 
     Returns:
         tuple: A tuple containing (fps, total_frames, width, height).
             float: The FPS (frames per second).
-            int: The total number of frames.
+            int: The total number of frames (or frames counted within *max_seconds*
+                when scanning is limited).
             int: The width of the video.
             int: The height of the video.
     """
@@ -234,6 +258,9 @@ def get_video_properties(video_path: Union[str, Path]) -> tuple[float, int, int,
     else:
         suffix = Path(video_path).suffix.lower()
 
+    # Millisecond budget for frame-scanning modes (None = unlimited)
+    limit_ms = max_seconds * 1000.0 if max_seconds > 0 else None
+
     # If the format is in the custom_formats list, manually calculate FPS and total_frames
     if suffix in custom_formats:
         total_frames = 0
@@ -246,6 +273,9 @@ def get_video_properties(video_path: Union[str, Path]) -> tuple[float, int, int,
             # Get the current frame's timestamp
             timestamp = video.get(cv2.CAP_PROP_POS_MSEC)  # Timestamp in milliseconds
             frame_timestamps.append(timestamp)
+            # Stop early if max_seconds is set
+            if limit_ms is not None and timestamp >= limit_ms:
+                break
 
         # Manually calculate FPS using frame timestamps
         if len(frame_timestamps) > 1:
@@ -259,10 +289,34 @@ def get_video_properties(video_path: Union[str, Path]) -> tuple[float, int, int,
     else:
         # Use OpenCV's default implementation for other formats
         total_frames = int(video.get(cv2.CAP_PROP_FRAME_COUNT))
-        fps = video.get(cv2.CAP_PROP_FPS)
+        fps = round(video.get(cv2.CAP_PROP_FPS))
+
+        # Fallback for streams where the container reports no frame count
+        if total_frames <= 0 and fps > 0 and limit_ms is not None:
+            # Count frames up to max_seconds by reading
+            frame_timestamps = []
+            while True:
+                ret, _ = video.read()
+                if not ret:
+                    break
+                total_frames += 1
+                timestamp = video.get(cv2.CAP_PROP_POS_MSEC)
+                frame_timestamps.append(timestamp)
+                if timestamp >= limit_ms:
+                    break
+            # Refine fps from real PTS deltas if we have enough samples
+            if len(frame_timestamps) > 1:
+                deltas = [
+                    frame_timestamps[i + 1] - frame_timestamps[i]
+                    for i in range(len(frame_timestamps) - 1)
+                    if frame_timestamps[i + 1] > frame_timestamps[i]
+                ]
+                if deltas:
+                    avg_ms = sum(deltas) / len(deltas)
+                    fps = round(1000.0 / avg_ms) if avg_ms > 0 else fps
 
     video.release()
-    return fps, total_frames, width, height
+    return VideoProperties(fps=fps, total_frames=total_frames, width=width, height=height)
 
 def _infer_codec_from_filename(filename: Union[str, Path]) -> str:
     """
