@@ -212,13 +212,12 @@ def get_video_properties(video_path: Union[str, Path], max_seconds: float = 0) -
 
     Args:
         video_path: Local file path or HTTP/HTTPS URL (e.g. S3 presigned URL).
-        max_seconds: Maximum number of seconds to analyse when frame-level scanning
-            is required (e.g. ``.ts`` format).  A value ``<= 0`` means scan the
-            entire video (default behaviour).  Positive values stop scanning after
-            *max_seconds* seconds, which avoids downloading the full stream.
-            For formats that rely on container metadata (non-``.ts``), this parameter
-            has no effect unless ``CAP_PROP_FRAME_COUNT`` is unavailable (streams),
-            in which case frames are counted up to *max_seconds*.
+        max_seconds: Window (in seconds) used to sample frames when computing
+            real FPS from PTS deltas (e.g. ``.ts`` format).  A value ``<= 0``
+            uses a fixed 60-frame sample (default).  Positive values sample
+            at most ``fps * max_seconds`` frames (minimum 60) so the full
+            file is never downloaded.  Total frames are always estimated from
+            container metadata (duration × real FPS), not by reading every frame.
 
     Returns:
         tuple: A tuple containing (fps, total_frames, width, height).
@@ -263,29 +262,57 @@ def get_video_properties(video_path: Union[str, Path], max_seconds: float = 0) -
 
     # If the format is in the custom_formats list, manually calculate FPS and total_frames
     if suffix in custom_formats:
-        total_frames = 0
-        frame_timestamps = []  # Store frame timestamps to calculate FPS
-        while True:
-            ret, _ = video.read()
-            if not ret:
-                break
-            total_frames += 1
-            # Get the current frame's timestamp
-            timestamp = video.get(cv2.CAP_PROP_POS_MSEC)  # Timestamp in milliseconds
-            frame_timestamps.append(timestamp)
-            # Stop early if max_seconds is set
-            if limit_ms is not None and timestamp >= limit_ms:
-                break
+        fps_container = video.get(cv2.CAP_PROP_FPS)
+        fc_container  = int(video.get(cv2.CAP_PROP_FRAME_COUNT))
 
-        # Manually calculate FPS using frame timestamps
-        if len(frame_timestamps) > 1:
-            time_diff = (frame_timestamps[-1] - frame_timestamps[0]) / 1000.0  # Time difference in seconds
-            fps = total_frames / time_diff if time_diff > 0 else 0
+        if max_seconds <= 0:
+            # Full scan: read every frame for an accurate count and precise FPS.
+            total_frames = 0
+            frame_timestamps = []
+            while True:
+                ret, _ = video.read()
+                if not ret:
+                    break
+                total_frames += 1
+                frame_timestamps.append(video.get(cv2.CAP_PROP_POS_MSEC))
         else:
-            fps = 0
+            # Partial scan: sample at most fps_container * max_seconds frames
+            # (minimum 60) to compute real FPS, then estimate total_frames from
+            # container duration so the full file is never downloaded.
+            fallback_fps = fps_container if fps_container > 0 else 25.0
+            sample_count = max(60, int(fallback_fps * max_seconds))
+            frame_timestamps = []
+            for _ in range(sample_count):
+                ret, _ = video.read()
+                if not ret:
+                    break
+                frame_timestamps.append(video.get(cv2.CAP_PROP_POS_MSEC))
 
-        # Round FPS to the nearest integer
-        fps = round(fps)
+        # Compute real FPS from PTS deltas (common to both paths)
+        fps = 0
+        if len(frame_timestamps) > 1:
+            deltas = [
+                frame_timestamps[i + 1] - frame_timestamps[i]
+                for i in range(len(frame_timestamps) - 1)
+                if frame_timestamps[i + 1] > frame_timestamps[i]
+            ]
+            if deltas:
+                avg_ms = sum(deltas) / len(deltas)
+                fps = round(1000.0 / avg_ms) if avg_ms > 0 else 0
+
+        # Fall back to container FPS if PTS-based calculation failed
+        if fps == 0 and fps_container > 0:
+            fps = round(fps_container)
+
+        # For partial scans estimate total_frames from container metadata
+        # so we report the real duration, not just the sampled window.
+        if max_seconds > 0:
+            if fc_container > 0 and fps_container > 0:
+                duration = fc_container / fps_container
+                total_frames = int(duration * fps) if fps > 0 else fc_container
+            else:
+                total_frames = len(frame_timestamps)
+        # For full scans total_frames was already counted in the loop above.
     else:
         # Use OpenCV's default implementation for other formats
         total_frames = int(video.get(cv2.CAP_PROP_FRAME_COUNT))
