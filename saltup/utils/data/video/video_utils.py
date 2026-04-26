@@ -201,7 +201,7 @@ class VideoProperties:
         yield self.height
 
 
-def get_video_properties(video_path: Union[str, Path], max_seconds: float = 0) -> VideoProperties:
+def get_video_properties(video_path: Union[str, Path], max_seconds: float = 15) -> VideoProperties:
 
     """
     Get video properties such as FPS, total frames, width, and height.
@@ -370,7 +370,7 @@ def process_video(
     video_input: Union[str, Path],
     callback: Callable[[Image, int, int], Image] = None,
     video_output: Union[str, Path] = None,
-    fps: int = None,
+    metadata: VideoProperties = None,
     frame_numbers: Optional[List[int]] = None
 ):
     """
@@ -380,7 +380,7 @@ def process_video(
         video_input: Path to the input video.
         callback: Callback function that receives a frame (as Image), frame number, and total frame count.
         video_output: Path to the output video (optional).
-        fps: FPS of the output video (if not specified, uses input FPS).
+        metadata: VideoProperties object containing video metadata (if not specified, it will be inferred).
         frame_numbers: List of specific frame numbers to process (e.g., [0, 10, 20, 150]).
                       If None, processes all frames sequentially.
     
@@ -393,38 +393,70 @@ def process_video(
         raise FileNotFoundError(f"Unable to open video: {video_input}")
     
     # Get video properties
-    input_fps, total_frames, width, height = get_video_properties(video_input)
+    if metadata is None:
+        metadata = get_video_properties(video_input)
+    input_fps, total_frames, width, height = metadata.fps, metadata.total_frames, metadata.width, metadata.height
     
     # Setup output video if specified
     if video_output:
         codec = _infer_codec_from_filename(video_output)
         fourcc = cv2.VideoWriter_fourcc(*codec)
-        output_fps = fps if fps is not None else input_fps
+        output_fps = metadata.fps if metadata.fps is not None else input_fps
         out = cv2.VideoWriter(str(video_output), fourcc, output_fps, (width, height))
     else:
         out = None
+ 
+    video_input_str = str(video_input)
+    if is_url(video_input_str):
+        input_suffix = extract_extension_from_url(video_input_str)
+    else:
+        input_suffix = Path(video_input_str).suffix.lower()
+    is_ts_input = input_suffix == '.ts'
     
     if frame_numbers is not None:
-        # 🚀 MODALITÀ SELETTIVA: salta ai frame specifici
+        # Selective mode: use cheap frame grabs; only do coarse seeks on seek-friendly formats.
         frames_to_process = sorted(set(frame_numbers))
-        
+        current_frame = 0
+        seek_gap_threshold = 300
+        seek_backoff_frames = 30
+ 
         for frame_number in frames_to_process:
+            if frame_number < 0:
+                continue
             if frame_number >= total_frames:
-                continue
-                
-            # Salta al frame desiderato
-            input_video.set(cv2.CAP_PROP_POS_FRAMES, frame_number)
+                break
+ 
+            gap = frame_number - current_frame
+ 
+            # Hybrid strategy for large gaps: coarse seek near target, then grab forward.
+            if not is_ts_input and gap > seek_gap_threshold:
+                seek_to = max(0, frame_number - seek_backoff_frames)
+                if input_video.set(cv2.CAP_PROP_POS_FRAMES, seek_to):
+                    current_frame = seek_to
+ 
+            # Advance to target by grabbing packets without decoding frame pixels.
+            while current_frame < frame_number:
+                if not input_video.grab():
+                    break
+                current_frame += 1
+ 
+            # Stream ended while seeking forward.
+            if current_frame != frame_number:
+                break
+ 
             ret, frame = input_video.read()
-            
             if not ret:
-                continue
-            
+                break
+ 
+            # We just consumed frame_number.
+            current_frame += 1
+ 
             # Apply callback
             if callback:
                 processed_frame = callback(Image(frame), frame_number, total_frames)
             else:
                 processed_frame = Image(frame)
-            
+ 
             # Write to output if specified
             if out is not None:
                 out.write(processed_frame.get_data())
