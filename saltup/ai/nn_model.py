@@ -286,7 +286,8 @@ class NeuralNetworkModel:
                     output = output.cpu().numpy()
             elif self._model_type == ModelType.KERAS:
                 # TensorFlow/Keras inference
-                output = self.model.predict(input_data)
+#                output = self.model.predict(input_data)
+                output = self.model(input_data, training=False).numpy()
             elif self._model_type == ModelType.ONNX:
                 if isinstance(input_data, torch.Tensor):
                     input_data = input_data.cpu().numpy()
