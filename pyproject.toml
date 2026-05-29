@@ -27,6 +27,7 @@ dependencies = [
     "scipy",
     "pyarrow",
     "fastparquet",
+    "albumentations",
     
     # Cloud & Utilities
     "boto3",           # S3 access
@@ -46,7 +47,7 @@ dependencies = [
 full = [
     # Deep Learning Frameworks
     "tensorflow==2.18.0",
-    "keras",
+    "keras==3.12.0",
     "torch",
     "torchvision",
     "torchaudio",
