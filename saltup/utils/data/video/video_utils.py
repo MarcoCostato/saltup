@@ -561,6 +561,7 @@ def preprocess_frame(
     gray: bool = True,
     blur: Optional[Tuple[int, int]] = None,
     normalize: bool = False,
+    roi: Optional[Tuple[float, float, float, float]] = None # normalized coordinates (x_min, y_min, x_max, y_max) of the region of interest
 ) -> np.ndarray:
     """Apply a configurable preprocessing pipeline to a single video frame.
 
@@ -579,6 +580,8 @@ def preprocess_frame(
             the 0–255 uint8 range (mean ≈ 128, std ≈ 32).  Useful for
             reducing sensitivity to global illumination changes.
             Defaults to ``False``.
+        roi: Normalized coordinates ``(x_min, y_min, x_max, y_max)`` of the region of interest.
+            If specified, only this region will be processed. Defaults to ``None``.
 
     Returns:
         The preprocessed frame as a NumPy array.
@@ -590,6 +593,23 @@ def preprocess_frame(
         >>> gray_small.shape
         (240, 320)
     """
+    # if roi is specified, crop the frame to the region of interest
+    if roi is not None:
+        x1, y1, x2, y2 = roi
+        h, w = frame.shape[:2]
+
+        x1 = int(round(x1 * w))
+        x2 = int(round(x2 * w))
+        y1 = int(round(y1 * h))
+        y2 = int(round(y2 * h))
+
+        x1 = max(0, min(x1, w - 1))
+        x2 = max(x1 + 1, min(x2, w))
+        y1 = max(0, min(y1, h - 1))
+        y2 = max(y1 + 1, min(y2, h))
+
+        frame = frame[y1:y2, x1:x2]
+        
     if resize is not None:
         frame = cv2.resize(frame, resize, interpolation=cv2.INTER_LINEAR)
     if gray:
