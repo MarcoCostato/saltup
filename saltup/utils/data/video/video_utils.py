@@ -1,5 +1,6 @@
 import os
 import cv2
+import contextlib
 import numpy as np
 import re
 import struct
@@ -10,6 +11,63 @@ from typing import Callable, Dict, Tuple, Union, List, Optional
 from urllib.parse import urlparse
 from saltup.utils.misc import is_url, extract_extension_from_url
 from saltup.utils.data.image.image_utils import ColorMode, ColorsBGR, Image, ImageFormat
+
+
+@contextlib.contextmanager
+def _ffmpeg_capture_options(options: Optional[Dict[str, object]]):
+    """Temporarily set OpenCV's FFmpeg demuxer options around a capture open.
+
+    OpenCV's FFmpeg backend reads the ``OPENCV_FFMPEG_CAPTURE_OPTIONS`` env var
+    when a ``VideoCapture`` is opened. We use it to pass ``ignore_editlist=1`` so
+    the mov/mp4 demuxer ignores the edit list, mapping frame index N to the same
+    picture a browser shows once the edit list is neutralized.
+
+    The env var is process-global and only read at open time, so wrap **only**
+    the ``cv2.VideoCapture(...)`` call. The previous value is restored on exit.
+    """
+    if not options:
+        yield
+        return
+    key = "OPENCV_FFMPEG_CAPTURE_OPTIONS"
+    previous = os.environ.get(key)
+    os.environ[key] = "|".join(f"{k};{v}" for k, v in options.items())
+    try:
+        yield
+    finally:
+        if previous is None:
+            os.environ.pop(key, None)
+        else:
+            os.environ[key] = previous
+
+
+@dataclass
+class VideoReadOptions:
+    """Decode-time options for reading a video (format-specific knobs).
+
+    Kept separate from the core read API so the function signatures stay
+    format-agnostic and new knobs can be added without churning callers.
+
+    Attributes:
+        ignore_edit_list: MP4/MOV only. Tell FFmpeg's mov demuxer to ignore the
+            edit list (``ignore_editlist``) so frame index N maps to the same
+            picture a browser shows once the edit list is neutralized.
+    """
+    ignore_edit_list: bool = False
+
+    def to_ffmpeg_capture_options(self) -> Dict[str, object]:
+        """Translate to FFmpeg demuxer options for OPENCV_FFMPEG_CAPTURE_OPTIONS."""
+        opts: Dict[str, object] = {}
+        if self.ignore_edit_list:
+            opts["ignore_editlist"] = 1
+        return opts
+
+
+def _open_capture(source, options: Optional[VideoReadOptions]):
+    """Open a ``cv2.VideoCapture`` honoring *options* (FFmpeg backend when set)."""
+    ffmpeg_opts = options.to_ffmpeg_capture_options() if options else {}
+    backend = cv2.CAP_FFMPEG if ffmpeg_opts else cv2.CAP_ANY
+    with _ffmpeg_capture_options(ffmpeg_opts or None):
+        return cv2.VideoCapture(source, backend)
 
 # =============================================================================
 # Module Constants
@@ -201,7 +259,7 @@ class VideoProperties:
         yield self.height
 
 
-def get_video_properties(video_path: Union[str, Path], max_seconds: float = 15) -> VideoProperties:
+def get_video_properties(video_path: Union[str, Path], max_seconds: float = 15, *, options: Optional[VideoReadOptions] = None) -> VideoProperties:
 
     """
     Get video properties such as FPS, total frames, width, and height.
@@ -240,8 +298,10 @@ def get_video_properties(video_path: Union[str, Path], max_seconds: float = 15) 
     # List of formats that require manual FPS calculation
     custom_formats = ['.ts']
 
-    # Open the video (OpenCV uses FFmpeg internally, supports both files and URLs)
-    video = cv2.VideoCapture(video_source)
+    # Open the video (OpenCV uses FFmpeg internally, supports both files and URLs).
+    # options may force the FFmpeg backend with demuxer flags (e.g. ignore_editlist),
+    # so total_frames/duration match the neutralized timeline.
+    video = _open_capture(video_source, options)
     if not video.isOpened():
         raise RuntimeError(f"Unable to open video: {video_path}")
 
@@ -371,11 +431,13 @@ def process_video(
     callback: Callable[[Image, int, int], Image] = None,
     video_output: Union[str, Path] = None,
     metadata: VideoProperties = None,
-    frame_numbers: Optional[List[int]] = None
+    frame_numbers: Optional[List[int]] = None,
+    *,
+    options: Optional[VideoReadOptions] = None,
 ):
     """
     Process a video frame by frame, applying a callback to each frame.
-    
+
     Args:
         video_input: Path to the input video.
         callback: Callback function that receives a frame (as Image), frame number, and total frame count.
@@ -383,18 +445,21 @@ def process_video(
         metadata: VideoProperties object containing video metadata (if not specified, it will be inferred).
         frame_numbers: List of specific frame numbers to process (e.g., [0, 10, 20, 150]).
                       If None, processes all frames sequentially.
-    
+        options: VideoReadOptions for decode-time knobs (e.g. ignore_edit_list).
+                      When metadata is not supplied, the inferred properties are
+                      read with the same options.
+
     Returns:
         None
     """
-    # Open the input video
-    input_video = cv2.VideoCapture(str(video_input))
+    # Open the input video (options may force FFmpeg + ignore_editlist).
+    input_video = _open_capture(str(video_input), options)
     if not input_video.isOpened():
         raise FileNotFoundError(f"Unable to open video: {video_input}")
-    
+
     # Get video properties
     if metadata is None:
-        metadata = get_video_properties(video_input)
+        metadata = get_video_properties(video_input, options=options)
     input_fps, total_frames, width, height = metadata.fps, metadata.total_frames, metadata.width, metadata.height
     
     # Setup output video if specified

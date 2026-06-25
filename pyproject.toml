@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "saltup"
-version = "0.9.8"
+version = "0.9.9"
 description = "add flavor to your AI projects"
 readme = "README.md"
 requires-python = ">=3.6"
@@ -31,6 +31,7 @@ dependencies = [
     
     # Cloud & Utilities
     "boto3",           # S3 access
+    "requests",        # Range reads for MP4 edit-list patching
     "tqdm",            # Progress bars
     "toml",
     "dotmap",
