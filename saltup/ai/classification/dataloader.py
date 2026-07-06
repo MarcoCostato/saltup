@@ -63,9 +63,9 @@ class ClassificationDataloader(BaseDataloader):
         img_path = str(self.image_paths[idx])
         label = self.labels[idx]
         image = Image(img_path)
-        img = image.get_data()
+        #img = image.get_data()
         
-        return img_path, img, label
+        return img_path, image, label
     
     def get_num_samples_per_class(self):
         """

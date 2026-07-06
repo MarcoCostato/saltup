@@ -122,6 +122,7 @@ class pytorch_ClassificationDataGenerator(BaseDatagenerator, Dataset):
     ):
         self.dataloader = dataloader
         self.target_size = target_size
+        self.target_height, self.target_width = target_size
         self.num_classes = num_classes
         self.batch_size = batch_size
         self._preprocess = preprocess
