@@ -63,7 +63,6 @@ class ClassificationDataloader(BaseDataloader):
         img_path = str(self.image_paths[idx])
         label = self.labels[idx]
         image = Image(img_path)
-        #img = image.get_data()
         
         return img_path, image, label
     
