@@ -4,6 +4,20 @@ import albumentations as A
 import numpy as np
 
 from saltup.ai.base_dataformat.base_dataloader import BaseDataloader
+from saltup.utils.data.image.image_utils import Image
+
+from typing import Protocol, Any
+
+
+# Define a protocol for the preprocessing function
+class PreprocessFn(Protocol):
+    def __call__(
+        self,
+        image: Image,
+        target_height: int,
+        target_width: int,
+        apply_padding: bool = ...,
+    ) -> Any: ...
 
 
 class BaseDatagenerator(ABC):
@@ -13,8 +27,9 @@ class BaseDatagenerator(ABC):
         target_size: Tuple[int, int], 
         num_classes: int,
         batch_size: int = 1,
-        preprocess: Optional[Callable[[Any], Any]] = None,
+        preprocess: Optional[PreprocessFn] = None,
         transform: Optional[A.Compose] = None,
+        apply_padding: bool = False,
         seed: Optional[int] = None
     ):
         """
@@ -27,6 +42,8 @@ class BaseDatagenerator(ABC):
             batch_size: Number of samples per batch
             preprocess: Optional custom preprocessing function
             transform: Optional albumentations transforms for augmentation
+            apply_padding: Whether to apply padding during preprocessing
+            seed: Random seed for reproducibility
         """
         self.dataloader = dataloader
         self._indexes = np.arange(len(dataloader))
@@ -37,7 +54,9 @@ class BaseDatagenerator(ABC):
             self._rng = np.random.default_rng()
         
         self.batch_size = batch_size
+        self.apply_padding = apply_padding
         self.target_size = target_size
+        self.target_height, self.target_width = target_size
         self.num_classes = num_classes
         
         self._transform = transform

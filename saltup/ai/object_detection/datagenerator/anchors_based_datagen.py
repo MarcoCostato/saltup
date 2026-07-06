@@ -35,6 +35,7 @@ class AnchorsBasedDatagen(BaseDatagenerator):
         batch_size: int = 1,
         preprocess: callable = None,
         transform: A.Compose = None,
+        apply_padding: bool = False,
         seed: int = None
     ):
         """
@@ -57,6 +58,7 @@ class AnchorsBasedDatagen(BaseDatagenerator):
             batch_size=batch_size,
             preprocess=preprocess,
             transform=transform,
+            apply_padding=apply_padding,
             seed = seed
         )
         
@@ -179,7 +181,7 @@ class AnchorsBasedDatagen(BaseDatagenerator):
             class_labels = np.empty(0, dtype=np.int32)
 
         # Preprocess image
-        image = self._preprocess(image, self.target_height, self.target_width, apply_padding=False)
+        image = self._preprocess(image, self.target_height, self.target_width, self.apply_padding)
 
         return image, boxes, class_labels
     

@@ -17,9 +17,10 @@ class keras_ClassificationDataGenerator(BaseDatagenerator, Sequence):
         batch_size=1,
         preprocess=None,
         transform=None,
+        apply_padding=False,
         seed=None
     ):
-        super().__init__(dataloader, target_size, num_classes, batch_size, preprocess, transform, seed)
+        super().__init__(dataloader, target_size, num_classes, batch_size, preprocess, transform, apply_padding, seed)
         self.on_epoch_end()
     
     def __len__(self):
@@ -48,7 +49,8 @@ class keras_ClassificationDataGenerator(BaseDatagenerator, Sequence):
                 num_classes=self.num_classes,
                 batch_size=self.batch_size,
                 preprocess=self._preprocess,
-                transform=self.transform
+                transform=self.transform,
+                apply_padding=self.apply_padding
             )
             list_output.append(current_datagen)
         return list_output
@@ -62,7 +64,8 @@ class keras_ClassificationDataGenerator(BaseDatagenerator, Sequence):
             num_classes=dg1.num_classes,
             batch_size=dg1.batch_size,
             preprocess=dg1._preprocess,
-            transform=dg1.transform
+            transform=dg1.transform,
+            apply_padding=dg1.apply_padding and dg2.apply_padding   #apply padding only if both datagens have it enabled
         )
         return current_datagen
     
@@ -78,8 +81,8 @@ class keras_ClassificationDataGenerator(BaseDatagenerator, Sequence):
             
             # Apply preprocessing
             if self._preprocess:
-                img = self._preprocess(img, target_size=self.target_size)
-            
+                img = self._preprocess(img, self.target_height, self.target_width, apply_padding=self.apply_padding)
+
             # Apply augmentations
             if self.do_augment and self.transform:
                 augmented = self.transform(image=img)
@@ -114,6 +117,7 @@ class pytorch_ClassificationDataGenerator(BaseDatagenerator, Dataset):
         batch_size=1,
         preprocess=None,
         transform=None,
+        apply_padding=False,
         seed=None
     ):
         self.dataloader = dataloader
@@ -122,6 +126,7 @@ class pytorch_ClassificationDataGenerator(BaseDatagenerator, Dataset):
         self.batch_size = batch_size
         self._preprocess = preprocess
         self.transform = transform
+        self.apply_padding = apply_padding
         #self.do_augment = True if transform else False
         
         # Set random seed for reproducibility
@@ -161,7 +166,8 @@ class pytorch_ClassificationDataGenerator(BaseDatagenerator, Dataset):
                 num_classes=self.num_classes,
                 batch_size=self.batch_size,
                 preprocess=self._preprocess,
-                transform=self.transform
+                transform=self.transform,
+                apply_padding=self.apply_padding
             )
             list_output.append(current_datagen)
         return list_output
@@ -175,7 +181,8 @@ class pytorch_ClassificationDataGenerator(BaseDatagenerator, Dataset):
             num_classes=dg1.num_classes,
             batch_size=dg1.batch_size,
             preprocess=dg1._preprocess,
-            transform=dg1.transform
+            transform=dg1.transform,
+            apply_padding=dg1.apply_padding and dg2.apply_padding   #apply padding only if both datagens have it enabled
         )
         return current_datagen
         
@@ -197,7 +204,7 @@ class pytorch_ClassificationDataGenerator(BaseDatagenerator, Dataset):
         
         # Apply preprocessing
         if self._preprocess:
-            img = self._preprocess(img, target_size=self.target_size)
+            img = self._preprocess(img, target_height=self.target_height, target_width=self.target_width, apply_padding=self.apply_padding)
         
         # Apply augmentations
         if self.transform:
