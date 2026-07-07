@@ -39,7 +39,7 @@ def test_keras_data_generator(create_dummy_dataset):
         target_size=IMG_SIZE,
         num_classes=2,
         batch_size=2,
-        preprocess=lambda x, target_size: cv2.resize(x, target_size)
+        preprocess=lambda img, target_width, target_height, apply_padding=False: cv2.resize(img.get_data(), (target_width, target_height))
     )
     X, y = datagen[0]
     assert X.shape == (2, *IMG_SIZE, 3)
@@ -53,7 +53,7 @@ def test_pytorch_data_generator(create_dummy_dataset):
         target_size=IMG_SIZE,
         num_classes=2,
         batch_size=2,
-        preprocess=lambda x, target_size: cv2.resize(x, target_size)
+        preprocess=lambda img, target_width, target_height, apply_padding=False: cv2.resize(img.get_data(), (target_width, target_height))
     )
 
     img_tensor, label_tensor = datagen[0]

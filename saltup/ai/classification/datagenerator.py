@@ -1,10 +1,12 @@
 
 
+from tkinter import Image
 from typing import List
 import numpy as np
 
 from saltup.ai.base_dataformat.base_datagen import BaseDatagenerator
 from saltup.ai.classification.dataloader import ClassificationDataloader
+from saltup.utils.data.image.image_utils import Image
 
 from tensorflow.keras.utils import Sequence, to_categorical #type: ignore
 
@@ -120,14 +122,8 @@ class pytorch_ClassificationDataGenerator(BaseDatagenerator, Dataset):
         apply_padding=False,
         seed=None
     ):
-        self.dataloader = dataloader
-        self.target_size = target_size
-        self.target_height, self.target_width = target_size
-        self.num_classes = num_classes
-        self.batch_size = batch_size
-        self._preprocess = preprocess
-        self.transform = transform
-        self.apply_padding = apply_padding
+        
+        super().__init__(dataloader, target_size, num_classes, batch_size, preprocess, transform, apply_padding, seed)
         #self.do_augment = True if transform else False
         
         # Set random seed for reproducibility
@@ -136,10 +132,7 @@ class pytorch_ClassificationDataGenerator(BaseDatagenerator, Dataset):
         # Create indexes for all samples
         self._indexes = np.arange(len(self.dataloader))
         self._rng.shuffle(self._indexes)
-    
-    def on_epoch_end(self):
-        # Shuffle indexes at the end of each epoch
-        self._rng.shuffle(self._indexes)
+
         
     def __len__(self):
         # Number of batches per epoch

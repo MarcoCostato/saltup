@@ -89,6 +89,10 @@ class YoloAnchorsBased(BaseYolo):
         else:
             raise TypeError(f"Invalid type {type(image)} for image: should be 'np.ndarray' or 'saltup.Image'.")
         
+        # Normalize single-channel images to 2D for consistent downstream handling
+        if num_channel == 1 and raw_img.ndim == 3:
+            raw_img = raw_img.squeeze(axis=-1)
+        
         # Validate input format
         if num_channel not in [1, 3]:
             raise ValueError("Only 1 or 3 channels are supported for multi-channel images")

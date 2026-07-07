@@ -17,7 +17,7 @@ class PreprocessFn(Protocol):
         target_height: int,
         target_width: int,
         apply_padding: bool = ...,
-    ) -> Any: ...
+    ) -> np.ndarray: ...
 
 
 class BaseDatagenerator(ABC):
@@ -62,7 +62,14 @@ class BaseDatagenerator(ABC):
         self._transform = transform
         self._do_augment = True if transform else False
         
-        self._preprocess = preprocess
+        # Set a default preprocessing function if none is provided
+        if preprocess is None:
+            def default_preprocess(image: Image, target_height: int, target_width: int, apply_padding: bool = False) -> np.ndarray:
+                return image.get_data()
+            
+            self._preprocess = default_preprocess
+        else:
+            self._preprocess = preprocess
         
         self._name = self.dataloader.get_name()
     

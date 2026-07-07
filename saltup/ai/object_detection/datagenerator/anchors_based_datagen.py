@@ -181,7 +181,7 @@ class AnchorsBasedDatagen(BaseDatagenerator):
             class_labels = np.empty(0, dtype=np.int32)
 
         # Preprocess image
-        image = self._preprocess(image, self.target_height, self.target_width, self.apply_padding)
+        image = self._preprocess(image, self.target_height, self.target_width, apply_padding=self.apply_padding)
 
         return image, boxes, class_labels
     
@@ -422,6 +422,7 @@ class KerasAnchorBasedDatagen(AnchorsBasedDatagen, Sequence):
         num_classes: int,
         batch_size: int = 1,
         preprocess: callable = None,
+        apply_padding: bool = False,
         transform: A.Compose = None
     ):
         """
@@ -439,6 +440,7 @@ class KerasAnchorBasedDatagen(AnchorsBasedDatagen, Sequence):
             num_classes=num_classes,
             batch_size=batch_size,
             preprocess=preprocess,
+            apply_padding=apply_padding,
             transform=transform
         )
         
@@ -494,6 +496,7 @@ class PyTorchAnchorBasedDatagen(AnchorsBasedDatagen, Dataset):
         num_classes: int,
         batch_size : int = 1,
         preprocess: callable = None,
+        apply_padding: bool = False,
         transform: A.Compose = None
     ):
         """
@@ -520,6 +523,7 @@ class PyTorchAnchorBasedDatagen(AnchorsBasedDatagen, Dataset):
             num_classes=num_classes,
             batch_size=1,  # Fixed to 1 for PyTorch Dataset
             preprocess=preprocess,
+            apply_padding=apply_padding,
             transform=transform
         )
         
