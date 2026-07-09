@@ -95,10 +95,12 @@ def create_avi_from_jpg(folder: str, output_filename: str, fps: int = 4) -> None
 
     # Read the first image to get its dimensions
     first_image = cv2.imread(image_files[0])
+    if first_image is None:
+        raise FileNotFoundError(f"Unable to read image: {image_files[0]}")
     height, width, _ = first_image.shape
 
     # Create a VideoWriter object with the specified output filename and FPS
-    fourcc= cv2.VideoWriter_fourcc(*'MJPG')
+    fourcc = cv2.VideoWriter.fourcc(*'MJPG')
     video = cv2.VideoWriter(output_filename, fourcc, fps, (width, height))
    
     if not video.isOpened():
@@ -297,6 +299,7 @@ def get_video_properties(video_path: Union[str, Path], max_seconds: float = 15, 
 
     # List of formats that require manual FPS calculation
     custom_formats = ['.ts']
+    total_frames = 0
 
     # Open the video (OpenCV uses FFmpeg internally, supports both files and URLs).
     # options may force the FFmpeg backend with demuxer flags (e.g. ignore_editlist),
@@ -428,9 +431,9 @@ def _infer_codec_from_filename(filename: Union[str, Path]) -> str:
 
 def process_video(
     video_input: Union[str, Path],
-    callback: Callable[[Image, int, int], Image] = None,
-    video_output: Union[str, Path] = None,
-    metadata: VideoProperties = None,
+    callback: Optional[Callable[[Image, int, int, Optional[VideoProperties]], Image]] = None,
+    video_output: Optional[Union[str, Path]] = None,
+    metadata: Optional[VideoProperties] = None,
     frame_numbers: Optional[List[int]] = None,
     *,
     options: Optional[VideoReadOptions] = None,
@@ -465,7 +468,7 @@ def process_video(
     # Setup output video if specified
     if video_output:
         codec = _infer_codec_from_filename(video_output)
-        fourcc = cv2.VideoWriter_fourcc(*codec)
+        fourcc = cv2.VideoWriter.fourcc(*codec)
         output_fps = metadata.fps if metadata.fps is not None else input_fps
         out = cv2.VideoWriter(str(video_output), fourcc, output_fps, (width, height))
     else:
@@ -518,10 +521,10 @@ def process_video(
  
             # Apply callback
             if callback:
-                processed_frame = callback(Image(frame), frame_number, total_frames)
+                processed_frame = callback(Image(frame), frame_number, total_frames, metadata)
             else:
                 processed_frame = Image(frame)
- 
+
             # Write to output if specified
             if out is not None:
                 out.write(processed_frame.get_data())
@@ -535,10 +538,10 @@ def process_video(
             
             # Apply callback
             if callback:
-                processed_frame = callback(Image(frame), frame_number, total_frames)
+                processed_frame = callback(Image(frame), frame_number, total_frames, metadata)
             else:
                 processed_frame = Image(frame)
-            
+
             # Write to output if specified
             if out is not None:
                 out.write(processed_frame.get_data())
