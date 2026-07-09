@@ -529,7 +529,7 @@ def process_video(
             if out is not None:
                 out.write(processed_frame.get_data())
     else:
-        # 📹 MODALITÀ SEQUENZIALE: processa tutti i frame (comportamento originale)
+        # SEQUENTIAL MODE: process all frames (original behavior)
         frame_number = 0
         while input_video.isOpened():
             ret, frame = input_video.read()
