@@ -73,7 +73,7 @@ class TestGetVideoPropertiesRemoteMP4:
     """Smoke tests against a small remote MP4 on a stable CDN."""
 
     def test_returns_nonzero_fps_width_height(self, mp4_props):
-        fps, total_frames, width, height = mp4_props
+        fps, _, width, height = mp4_props
         assert fps > 0, f"expected fps > 0, got {fps}"
         assert width > 0, f"expected width > 0, got {width}"
         assert height > 0, f"expected height > 0, got {height}"
@@ -109,7 +109,7 @@ class TestGetVideoPropertiesRemoteTS:
     """Tests against an Apple HLS .ts segment that requires frame-level scanning."""
 
     def test_returns_nonzero_fps_width_height(self):
-        fps, total_frames, width, height = get_video_properties(
+        fps, _, width, height = get_video_properties(
             _TS_URL, max_seconds=10
         )
         assert fps > 0, f"expected fps > 0, got {fps}"
