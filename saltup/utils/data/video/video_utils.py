@@ -434,7 +434,7 @@ def process_video(
     frame_numbers: Optional[List[int]] = None,
     *,
     options: Optional[VideoReadOptions] = None,
-):
+) -> VideoProperties:
     """
     Process a video frame by frame, applying a callback to each frame.
 
@@ -450,7 +450,7 @@ def process_video(
                       read with the same options.
 
     Returns:
-        None
+        VideoProperties
     """
     # Open the input video (options may force FFmpeg + ignore_editlist).
     input_video = _open_capture(str(video_input), options)
@@ -549,6 +549,8 @@ def process_video(
     input_video.release()
     if out is not None:
         out.release()
+    
+    return metadata
 
 
 # =============================================================================
