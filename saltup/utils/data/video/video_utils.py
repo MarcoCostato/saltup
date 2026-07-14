@@ -814,44 +814,6 @@ def extract_quadrant_variance(
     n_quadrants: int = 4,
     fps: float = 30.0,
 ) -> Dict[int, Dict[str, float]]:
-
-    rows, cols = _compute_grid(n_quadrants)
-    names = _quadrant_names(n_quadrants)
-    PIXEL_K = 4.5
-    WINDOW_SECONDS = 1.5
-    MOVE_WINDOW_SEC = 1
-    MIN_SECONDS = 0.0
-    SMOOTH_SEC = 0.5
-    MOVE_THRESHOLD = 8.0
-
-    def cell_slices(H, W):
-        # (y0, y1, x0, x1) for each cell, row-major (top-left first)
-        ys = np.linspace(0, H, rows + 1).round().astype(int)
-        xs = np.linspace(0, W, cols + 1).round().astype(int)
-        return [(ys[r], ys[r + 1], xs[c], xs[c + 1])
-                for r in range(rows) for c in range(cols)]
-    
-    def moving_mask(m, pixel_k):
-        # A pixel is "moving" if its temporal std (m = the std_map) is clearly ABOVE the frame's own
-        # noise level. That level is estimated robustly, per frame:
-        #   med = median(m)                      -> the TYPICAL value (~background noise); most pixels
-        #                                           are static so the median ignores the few moving ones
-        #   MAD = median(|m - med|)              -> Median Absolute Deviation = a robust "spread"
-        #   mad = MAD * 1.4826                    -> rescaled so it equals a standard deviation for
-        #                                           Gaussian data -> pixel_k is then "number of sigmas"
-        #   threshold = med + pixel_k * mad      -> typical level + pixel_k robust-sigmas
-        # median/MAD (not mean/std) are used so the bright moving pixels don't inflate the threshold.
-        # A pixel is moving when m > threshold. Self-adapting per frame; fully causal (this frame only).
-        med = np.median(m); mad = np.median(np.abs(m - med)) * 1.4826 + 1e-6
-        return m > (med + pixel_k * mad)
-    
- 
-
-def extract_quadrant_variance(
-    frames: List[np.ndarray],
-    n_quadrants: int = 4,
-    fps: float = 30.0,
-) -> Dict[int, Dict[str, float]]:
  
     rows, cols = _compute_grid(n_quadrants)
     names = _quadrant_names(n_quadrants)
