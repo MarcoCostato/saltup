@@ -893,7 +893,7 @@ def extract_quadrant_variance(
  
     centroids, ncent = [], []
     _openk = np.ones((3, 3), np.uint8)               # for morphological opening (denoise mask)
- 
+    frames = [f.astype(np.float32) for f in frames]
     for frame in frames:
         # brightness compensation PER CELL: subtract each cell's own mean, so a light change or
         # motion in ONE cell does not leak into the others through a shared global mean.
