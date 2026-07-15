@@ -1,4 +1,6 @@
 import os
+import queue
+import threading
 import cv2
 import contextlib
 import numpy as np
@@ -68,6 +70,47 @@ def _open_capture(source, options: Optional[VideoReadOptions]):
     backend = cv2.CAP_FFMPEG if ffmpeg_opts else cv2.CAP_ANY
     with _ffmpeg_capture_options(ffmpeg_opts or None):
         return cv2.VideoCapture(source, backend)
+    
+@dataclass
+class QuadrantVarianceConfig:
+    """Tunable knobs for :func:`extract_quadrant_variance`.
+
+    Every field defaults to the value previously hard-coded in the function,
+    so passing ``None`` (or no config) reproduces the original behaviour.
+
+    Attributes:
+        pixel_k: Robust-sigma multiplier for the per-frame moving-pixel mask
+            (median + ``pixel_k`` * MAD). Higher is stricter (fewer noise pixels).
+        window_seconds: Temporal window (seconds) over which the per-pixel
+            movement std is accumulated (EMA look-back).
+        move_window_sec: Look-back (seconds) for the per-cell activity-centre
+            shift that forms the movement signal.
+        min_seconds: Minimum duration (seconds) an active run must last to be
+            kept; shorter bursts are discarded.
+        smooth_sec: Trailing-EMA smoothing window (seconds) for the movement
+            signal (lower = less lag).
+        move_threshold: Hysteresis ON threshold for the smoothed movement
+            signal; the OFF threshold is ``0.5 * move_threshold``.
+        start_s: Seek offset (seconds) into the video before processing.
+        duration_s: Optional processing limit (seconds); ``None`` = whole video.
+        resize_width: Width (px) the frame is downscaled to before analysis
+            (height scaled to preserve aspect ratio).
+        store: If ``True``, keep per-frame RGB frames and std maps in memory.
+        verbose: If ``True``, print periodic progress to stdout.
+    """
+    n_quadrants: int = 4
+    pixel_k: float = 4.5
+    window_seconds: float = 1.5
+    move_window_sec: float = 1.0
+    min_seconds: float = 0.0
+    smooth_sec: float = 0.5
+    move_threshold: float = 8.0
+    start_s: float = 0.0
+    duration_s: Optional[float] = None
+    resize_width: int = 320
+    store: bool = True
+    verbose: bool = True
+    fps_override: Optional[float] = None
 
 # =============================================================================
 # Module Constants
@@ -810,20 +853,13 @@ def extract_quadrant_motion(
     return energies
 
 def extract_quadrant_variance(
-    frames: List[np.ndarray],
-    n_quadrants: int = 4,
-    fps: float = 30.0,
-) -> Dict[int, Dict[str, float]]:
- 
-    rows, cols = _compute_grid(n_quadrants)
-    names = _quadrant_names(n_quadrants)
-    PIXEL_K = 4.5
-    WINDOW_SECONDS = 1.5
-    MOVE_WINDOW_SEC = 1
-    MIN_SECONDS = 0.0
-    SMOOTH_SEC = 0.5
-    MOVE_THRESHOLD = 8.0
- 
+    path: str,
+    config: Optional[QuadrantVarianceConfig] = None,
+) -> Tuple[Dict[int, Dict[str, float]], np.ndarray]:
+    if config is None:
+        config = QuadrantVarianceConfig()
+    
+
     def cell_slices(H, W):
         # (y0, y1, x0, x1) for each cell, row-major (top-left first)
         ys = np.linspace(0, H, rows + 1).round().astype(int)
@@ -845,19 +881,60 @@ def extract_quadrant_variance(
         med = np.median(m); mad = np.median(np.abs(m - med)) * 1.4826 + 1e-6
         return m > (med + pixel_k * mad)
     
-    N = max(2, int(round(WINDOW_SECONDS * fps)))
+    n_quadrants = config.n_quadrants
+    rows, cols = _compute_grid(n_quadrants)
+    names = _quadrant_names(n_quadrants)
+    pixel_k = config.pixel_k
+    window_seconds = config.window_seconds
+    move_window_sec = config.move_window_sec
+    min_seconds = config.min_seconds
+    smooth_sec = config.smooth_sec
+    move_threshold = config.move_threshold
+    start_s = config.start_s
+    duration_s = config.duration_s
+    resize_width = config.resize_width
+    store = config.store
+    verbose = config.verbose
+    fps_override = config.fps_override
+    
+    cap = cv2.VideoCapture(path)
+    if not cap.isOpened():
+        raise FileNotFoundError(f"Could not open video: {path}")
+    fps = float(fps_override) if fps_override else (cap.get(cv2.CAP_PROP_FPS) or 25.0)
+    N   = max(2, int(round(window_seconds * fps)))
     alpha = 1.0 / N
- 
+
+    if start_s > 0:
+        cap.set(cv2.CAP_PROP_POS_FRAMES, int(round(start_s * fps)))
+    limit = int(round(duration_s * fps)) if duration_s else None
+
+    q = queue.Queue(maxsize=8)
+    def reader():
+        i = 0
+        while limit is None or i < limit:
+            ok, frame = cap.read()
+            if not ok:
+                break
+            q.put(frame); i += 1
+        q.put(None)
+    t = threading.Thread(target=reader, daemon=True); t.start()
+
     mean_acc = sq_acc = None
- 
-    centroids, ncent = [], []
+    frames_rgb, std_maps, centroids, ncent = [], [], [], []   # ncent = normalized centre (0..1)
     _openk = np.ones((3, 3), np.uint8)               # for morphological opening (denoise mask)
-    frames = [f.astype(np.float32) for f in frames]
-    for frame in frames:
+    i = 0
+    while True:
+        frame = q.get()
+        if frame is None:
+            break
+        h0, w0 = frame.shape[:2]
+        h = int(round(h0 * resize_width / w0))
+        small = cv2.resize(frame, (resize_width, h), interpolation=cv2.INTER_AREA)
+        gray  = cv2.cvtColor(small, cv2.COLOR_BGR2GRAY).astype(np.float32)
         # brightness compensation PER CELL: subtract each cell's own mean, so a light change or
         # motion in ONE cell does not leak into the others through a shared global mean.
-        for (y0, y1, x0, x1) in cell_slices(*frame.shape):
-            frame[y0:y1, x0:x1] -= frame[y0:y1, x0:x1].mean()
+        for (y0, y1, x0, x1) in cell_slices(*gray.shape):
+            gray[y0:y1, x0:x1] -= gray[y0:y1, x0:x1].mean()
  
  
         # TEMPORAL MOVEMENT MATRIX (std_map): per pixel, keep an EMA of the mean (mean_acc) and of
@@ -865,16 +942,16 @@ def extract_quadrant_variance(
         # variance = mean(x^2) - mean(x)^2  and  std = sqrt(variance). std_map is high where a pixel
         # kept changing during the window, ~0 where static. O(1) memory, no frame buffer.
         if mean_acc is None:
-                mean_acc = frame.copy(); sq_acc = frame * frame          # bootstrap on the first frame
+                mean_acc = gray.copy(); sq_acc = gray * gray          # bootstrap on the first frame
         else:
-            cv2.accumulateWeighted(frame,        mean_acc, alpha)  # EMA of the mean
-            cv2.accumulateWeighted(frame * frame, sq_acc,   alpha)  # EMA of the mean of squares
+            cv2.accumulateWeighted(gray,        mean_acc, alpha)  # EMA of the mean
+            cv2.accumulateWeighted(gray * gray, sq_acc,   alpha)  # EMA of the mean of squares
         std_map = np.sqrt(np.clip(sq_acc - mean_acc * mean_acc, 0, None))
  
         # SPATIAL movement: find the CENTRE of the moving pixels in each cell via its row/column
         # projections. We just record the centre here; the movement signal (how far the centre
         # shifts over ~1 s) is computed after the loop -> no per-frame speed, no double smoothing.
-        mask = moving_mask(std_map, PIXEL_K)
+        mask = moving_mask(std_map, pixel_k)
         # morphological OPEN: drop isolated noise pixels, keep real blobs -> the centre doesn't
         # jitter on scattered noise, so an empty cell stays put (no false movement).
         mask = cv2.morphologyEx(mask.astype(np.uint8), cv2.MORPH_OPEN, _openk).astype(bool)
@@ -890,8 +967,20 @@ def extract_quadrant_variance(
             cframe[qi] = (x0 + ex, y0 + ey)
         ncent.append(cnorm)
         centroids.append(cframe)        # activity centre per cell (or NaN)
+        if store:
+            frames_rgb.append(cv2.cvtColor(small, cv2.COLOR_BGR2RGB))
+            std_maps.append(std_map.astype(np.float16))
+        i += 1
+        if verbose and i % 300 == 0:
+            print(f"  processed {i} frames...", end="\r")
+    t.join(); cap.release()
+    if verbose:
+        print(f"Done. {i} frames @ {fps:.1f} fps  (window N = {N} = {N/fps:.2f}s)")
+    # MOVEMENT signal = how far each cell's centre shifted over the last ~0.7 s, in % of the cell.
+    # (Flicker in place -> centre stays -> ~0; real translation -> centre moves -> high.)
+    # Shorter look-back = more responsive / less lag; longer = smoother.
     nc = np.asarray(ncent, dtype=np.float32).reshape(-1, n_quadrants, 2)
-    Wm = max(1, int(round(MOVE_WINDOW_SEC * fps)))
+    Wm = max(1, int(round(move_window_sec * fps)))
     signal = np.zeros((len(nc), n_quadrants), dtype=np.float32)
     for qi in range(n_quadrants):
         a = nc[:, qi]; b = np.roll(a, Wm, axis=0); b[:Wm] = np.nan
@@ -908,21 +997,49 @@ def extract_quadrant_variance(
     # A flickering-in-place region barely shifts the centre, so it reads ~0 and does not trip;
     # only genuine spatial movement does.
     T,Q = signal.shape
-    ws = max(1, int(round(SMOOTH_SEC * fps))); a_s = 1.0 / ws     # trailing smoothing (lower = less lag)
-    min_len = int(round(MIN_SECONDS * fps))
-    hi = float(MOVE_THRESHOLD); lo = 0.5 * hi
+    ws = max(1, int(round(smooth_sec * fps))); a_s = 1.0 / ws     # trailing smoothing (lower = less lag)
+    min_len = int(round(min_seconds * fps))
+    hi = float(move_threshold); lo = 0.5 * hi
  
     smooth = np.empty_like(signal)                    # causal trailing EMA
     for qi in range(Q):
         e = float(signal[0, qi])
         for i in range(T):
             e += a_s * (float(signal[i, qi]) - e); smooth[i, qi] = e
- 
+
+    active = np.zeros((T, Q), dtype=bool)
+    min_run = max(min_len, 1)
+    for qi in range(Q):
+        sm = smooth[:, qi]; on = False; raw = np.zeros(T, dtype=bool)
+        for i in range(N, T):
+            if on and sm[i] < lo:
+                on = False
+            elif (not on) and sm[i] > hi:
+                on = True
+            raw[i] = on
+        i = N
+        while i < T:
+            if raw[i]:
+                j = i
+                while j < T and raw[j]:
+                    j += 1
+                if j - i >= min_run:
+                    active[i:j, qi] = True
+                i = j
+            else:
+                i += 1
+
+    threshold = np.full(Q, hi)
     energies: Dict[int, Dict[str, float]] = {
-        i: {name: float(smooth[i, ci]) for ci, name in enumerate(names)}
+        i: {
+            name: float(smooth[i, ci])
+            for ci, name in enumerate(names)
+            if active[i, ci]
+        }
         for i in range(T)
+        if any(active[i])
     }
-    return energies
+    return energies, threshold
  
 # =============================================================================
 # Windowed Segment Aggregation & Filtering
