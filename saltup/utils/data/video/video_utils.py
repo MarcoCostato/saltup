@@ -809,8 +809,121 @@ def extract_quadrant_motion(
     }
     return energies
 
-
-
+def extract_quadrant_variance(
+    frames: List[np.ndarray],
+    n_quadrants: int = 4,
+    fps: float = 30.0,
+) -> Dict[int, Dict[str, float]]:
+ 
+    rows, cols = _compute_grid(n_quadrants)
+    names = _quadrant_names(n_quadrants)
+    PIXEL_K = 4.5
+    WINDOW_SECONDS = 1.5
+    MOVE_WINDOW_SEC = 1
+    MIN_SECONDS = 0.0
+    SMOOTH_SEC = 0.5
+    MOVE_THRESHOLD = 8.0
+ 
+    def cell_slices(H, W):
+        # (y0, y1, x0, x1) for each cell, row-major (top-left first)
+        ys = np.linspace(0, H, rows + 1).round().astype(int)
+        xs = np.linspace(0, W, cols + 1).round().astype(int)
+        return [(ys[r], ys[r + 1], xs[c], xs[c + 1])
+                for r in range(rows) for c in range(cols)]
+    
+    def moving_mask(m, pixel_k):
+        # A pixel is "moving" if its temporal std (m = the std_map) is clearly ABOVE the frame's own
+        # noise level. That level is estimated robustly, per frame:
+        #   med = median(m)                      -> the TYPICAL value (~background noise); most pixels
+        #                                           are static so the median ignores the few moving ones
+        #   MAD = median(|m - med|)              -> Median Absolute Deviation = a robust "spread"
+        #   mad = MAD * 1.4826                    -> rescaled so it equals a standard deviation for
+        #                                           Gaussian data -> pixel_k is then "number of sigmas"
+        #   threshold = med + pixel_k * mad      -> typical level + pixel_k robust-sigmas
+        # median/MAD (not mean/std) are used so the bright moving pixels don't inflate the threshold.
+        # A pixel is moving when m > threshold. Self-adapting per frame; fully causal (this frame only).
+        med = np.median(m); mad = np.median(np.abs(m - med)) * 1.4826 + 1e-6
+        return m > (med + pixel_k * mad)
+    
+    N = max(2, int(round(WINDOW_SECONDS * fps)))
+    alpha = 1.0 / N
+ 
+    mean_acc = sq_acc = None
+ 
+    centroids, ncent = [], []
+    _openk = np.ones((3, 3), np.uint8)               # for morphological opening (denoise mask)
+    frames = [f.astype(np.float32) for f in frames]
+    for frame in frames:
+        # brightness compensation PER CELL: subtract each cell's own mean, so a light change or
+        # motion in ONE cell does not leak into the others through a shared global mean.
+        for (y0, y1, x0, x1) in cell_slices(*frame.shape):
+            frame[y0:y1, x0:x1] -= frame[y0:y1, x0:x1].mean()
+ 
+ 
+        # TEMPORAL MOVEMENT MATRIX (std_map): per pixel, keep an EMA of the mean (mean_acc) and of
+        # the mean-of-squares (sq_acc) over ~WINDOW_SECONDS (alpha = 1/N). Then, per pixel,
+        # variance = mean(x^2) - mean(x)^2  and  std = sqrt(variance). std_map is high where a pixel
+        # kept changing during the window, ~0 where static. O(1) memory, no frame buffer.
+        if mean_acc is None:
+                mean_acc = frame.copy(); sq_acc = frame * frame          # bootstrap on the first frame
+        else:
+            cv2.accumulateWeighted(frame,        mean_acc, alpha)  # EMA of the mean
+            cv2.accumulateWeighted(frame * frame, sq_acc,   alpha)  # EMA of the mean of squares
+        std_map = np.sqrt(np.clip(sq_acc - mean_acc * mean_acc, 0, None))
+ 
+        # SPATIAL movement: find the CENTRE of the moving pixels in each cell via its row/column
+        # projections. We just record the centre here; the movement signal (how far the centre
+        # shifts over ~1 s) is computed after the loop -> no per-frame speed, no double smoothing.
+        mask = moving_mask(std_map, PIXEL_K)
+        # morphological OPEN: drop isolated noise pixels, keep real blobs -> the centre doesn't
+        # jitter on scattered noise, so an empty cell stays put (no false movement).
+        mask = cv2.morphologyEx(mask.astype(np.uint8), cv2.MORPH_OPEN, _openk).astype(bool)
+        cnorm = [(np.nan, np.nan)] * n_quadrants                  # normalized centre (0..1) per cell
+        cframe = [(np.nan, np.nan)] * n_quadrants                 # absolute centre (x, y) for the player
+        for qi, (y0, y1, x0, x1) in enumerate(cell_slices(*mask.shape)):
+            m = mask[y0:y1, x0:x1]; tot = float(m.sum()); qh, qw = y1 - y0, x1 - x0
+            if tot < max(15.0, 0.015 * qh * qw):         # too few moving pixels -> undefined
+                continue
+            ex = float((np.arange(qw) * m.sum(0)).sum() / tot)   # column profile -> x of centre
+            ey = float((np.arange(qh) * m.sum(1)).sum() / tot)   # row profile    -> y of centre
+            cnorm[qi]  = (ex / qw, ey / qh)
+            cframe[qi] = (x0 + ex, y0 + ey)
+        ncent.append(cnorm)
+        centroids.append(cframe)        # activity centre per cell (or NaN)
+    nc = np.asarray(ncent, dtype=np.float32).reshape(-1, n_quadrants, 2)
+    Wm = max(1, int(round(MOVE_WINDOW_SEC * fps)))
+    signal = np.zeros((len(nc), n_quadrants), dtype=np.float32)
+    for qi in range(n_quadrants):
+        a = nc[:, qi]; b = np.roll(a, Wm, axis=0); b[:Wm] = np.nan
+        d = 100.0 * np.hypot(a[:, 0] - b[:, 0], a[:, 1] - b[:, 1])
+        d[np.isnan(d)] = 0.0
+        signal[:, qi] = d   
+ 
+ 
+    # signal: (T, NQ) = per-cell MOVEMENT (% of the cell the activity centre shifted over ~1 s,
+    # from process()). Causal:
+    #   * trailing-EMA smoothing (past only),
+    #   * a cell is ACTIVE when its smoothed movement crosses `move_threshold`, and stays on
+    #     until it drops below half that (hysteresis); bursts shorter than min_seconds dropped.
+    # A flickering-in-place region barely shifts the centre, so it reads ~0 and does not trip;
+    # only genuine spatial movement does.
+    T,Q = signal.shape
+    ws = max(1, int(round(SMOOTH_SEC * fps))); a_s = 1.0 / ws     # trailing smoothing (lower = less lag)
+    min_len = int(round(MIN_SECONDS * fps))
+    hi = float(MOVE_THRESHOLD); lo = 0.5 * hi
+ 
+    smooth = np.empty_like(signal)                    # causal trailing EMA
+    for qi in range(Q):
+        e = float(signal[0, qi])
+        for i in range(T):
+            e += a_s * (float(signal[i, qi]) - e); smooth[i, qi] = e
+ 
+    energies: Dict[int, Dict[str, float]] = {
+        i: {name: float(smooth[i, ci]) for ci, name in enumerate(names)}
+        for i in range(T)
+    }
+    return energies
+ 
 # =============================================================================
 # Windowed Segment Aggregation & Filtering
 # =============================================================================
