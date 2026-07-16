@@ -124,7 +124,7 @@ class MotionDetectionOptions:
                  grid_quadrants: int = 4, *, start_s: float = 0.0,
                  duration_s: Optional[float] = None, resize_width: int = 320,
                  fps_override: Optional[float] = None, store: bool = False,
-                 verbose: bool = False) -> "MotionDetectionOptions":
+                 verbose: bool = False, roi: Optional[Tuple[float, float, float, float]] = None) -> "MotionDetectionOptions":
         """Build options from a few independent, high-level controls.
 
         The raw fields of :class:`MotionDetectionOptions` are coupled: the activity
@@ -190,6 +190,7 @@ class MotionDetectionOptions:
             store=store,
             verbose=verbose,
             fps_override=fps_override,
+            roi=roi
         )
 
 
