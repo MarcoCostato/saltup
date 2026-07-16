@@ -95,6 +95,8 @@ class MotionDetectionOptions:
         duration_s: Optional processing limit (seconds); ``None`` = whole video.
         resize_width: Width (px) the frame is downscaled to before analysis
             (height scaled to preserve aspect ratio).
+        roi: Optional normalized ``(x_min, y_min, x_max, y_max)`` crop applied
+            before resizing or any other frame preprocessing.
         store: If ``True``, keep per-frame RGB frames and std maps in memory.
         verbose: If ``True``, print periodic progress to stdout.
     """
@@ -111,6 +113,7 @@ class MotionDetectionOptions:
     store: bool = True
     verbose: bool = True
     fps_override: Optional[float] = None
+    roi: Optional[Tuple[float, float, float, float]] = None
 
 # =============================================================================
 # Module Constants
@@ -609,11 +612,12 @@ def preprocess_frame(
     gray: bool = True,
     blur: Optional[Tuple[int, int]] = None,
     normalize: bool = False,
-    roi: Optional[Tuple[float, float, float, float]] = None # normalized coordinates (x_min, y_min, x_max, y_max) of the region of interest
+    roi: Optional[Tuple[float, float, float, float]] = None,
 ) -> np.ndarray:
     """Apply a configurable preprocessing pipeline to a single video frame.
 
-    Operations are applied in order: resize → grayscale → blur → normalize.
+    Operations are applied in order: ROI crop → resize → grayscale → blur
+    → normalize.
     Each step is optional and controlled by its corresponding argument.
 
     Args:
@@ -641,7 +645,7 @@ def preprocess_frame(
         >>> gray_small.shape
         (240, 320)
     """
-    # if roi is specified, crop the frame to the region of interest
+    # Crop first so every subsequent operation only processes the ROI.
     if roi is not None:
         x1, y1, x2, y2 = roi
         h, w = frame.shape[:2]
@@ -764,6 +768,7 @@ def motion_detection(
     store = config.store
     verbose = config.verbose
     fps_override = config.fps_override
+    roi = config.roi
 
     # Get metadata and compute frame range to process
     metadata = get_video_properties(path, options=options)
@@ -808,6 +813,10 @@ def motion_detection(
                 break
             frame, frame_number = item
             try:
+                if roi is not None:
+                    # if ROI is specified, crop the frame before resizing and processing
+                    frame = preprocess_frame(frame, gray=False, roi=roi)
+
                 h0, w0 = frame.shape[:2]
                 h = int(round(h0 * resize_width / w0)) if w0 > 0 else resize_width
                 small = cv2.resize(frame, (resize_width, h), interpolation=cv2.INTER_AREA)
